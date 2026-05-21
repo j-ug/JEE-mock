@@ -1,0 +1,9 @@
+{
+  "name": "JEE - Mock Assessment",
+  "description": "Professional JEE mock test platform with secure fullscreen exam environment and detailed student analytics.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

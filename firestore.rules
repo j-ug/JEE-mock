@@ -1,0 +1,89 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // --- GLOBAL HELPERS ---
+    function isSignedIn() { 
+      return request.auth != null && request.auth.uid != null; 
+    }
+    
+    // Auth-based checks are cheaper but we fallback to DB roles for dynamic staff
+    function isHardcodedStaff() {
+      return request.auth.token.email.lower() in [
+          'jeswinsamuel.la@gmail.com', 'sskk@gmail.com', 'jk@gmail.com', 
+          'sakthimsk89@gmail.com', 'je45@gmail.com', 'sivabalan442011@gmail.com', 
+          'bhuvaneshwarravikumar@gmail.com', 'admin123@gmail.com', 'thedivine.la@gmail.com'
+      ];
+    }
+
+    function isSuperAdmin() {
+      return isSignedIn() && (
+        isHardcodedStaff() ||
+        request.auth.uid in ['YdoSMUagSKTr3MGqmJqOau2Wstp2'] ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
+      );
+    }
+
+    function isStaff() {
+      return isSignedIn() && (
+        isHardcodedStaff() ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'staff'])
+      );
+    }
+
+    function isDataViewer() {
+      return isStaff();
+    }
+
+    // --- 1. USERS ---
+    match /users/{userId} {
+      allow get: if isSignedIn();
+      allow create: if isSignedIn() && request.auth.uid == userId;
+      allow update: if isSignedIn() && (
+        request.auth.uid == userId || isStaff()
+      );
+      allow delete: if isSuperAdmin() || (isSignedIn() && request.auth.uid == userId);
+      allow list: if isSignedIn();
+    }
+    
+    // --- 2. EXAMS ---
+    match /exams/{examId} {
+      allow read: if isSignedIn();
+      allow write: if isStaff();
+    }
+
+    // --- 3. SUBMISSIONS ---
+    match /submissions/{submissionId} {
+      function isOwnSubmission() {
+        return isSignedIn() && (
+          submissionId.startsWith(request.auth.uid + '_') || 
+          (resource != null && resource.data.userId == request.auth.uid)
+        );
+      }
+
+      allow get: if isDataViewer() || isOwnSubmission();
+      allow list: if isDataViewer() || (isSignedIn() && (submissionId.startsWith(request.auth.uid + '_') || (resource != null && (resource.data.userId == request.auth.uid || resource.data.status == 'completed'))));
+      
+      allow create: if isSignedIn() && (
+        request.resource.data.userId == request.auth.uid ||
+        submissionId.startsWith(request.auth.uid + '_')
+      );
+                     
+      allow update: if isStaff() || (
+        isSignedIn() && 
+        (submissionId.startsWith(request.auth.uid + '_') || (resource != null && resource.data.userId == request.auth.uid)) && 
+        request.resource.data.userId == request.auth.uid
+      );
+      
+      allow delete: if isStaff() || isOwnSubmission();
+    }
+    
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
