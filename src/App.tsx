@@ -4,7 +4,7 @@ import AuthPage from './pages/AuthPage';
 import StudentDashboard from './pages/StudentDashboard';
 import AdminDashboard from './pages/AdminDashboard';
 import TestInterface from './pages/TestInterface';
-import { Loader2 } from 'lucide-react';
+import { Loader2, WifiOff } from 'lucide-react';
 import { SplineSceneBasic } from './components/ui/spline-demo';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -13,6 +13,19 @@ function AppContent() {
   const [activeTestId, setActiveTestId] = useState<string | null>(() => {
     return localStorage.getItem('activeTestId');
   });
+
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
 
   const [showWelcome, setShowWelcome] = useState(true);
 
@@ -44,6 +57,16 @@ function AppContent() {
 
   return (
     <>
+      {!isOnline && (
+        <div className="fixed bottom-6 right-6 z-[100] bg-zinc-900 border border-zinc-700 text-white p-6 rounded-2xl shadow-2xl flex items-center gap-4 transition-all duration-300 transform translate-y-0 opacity-100">
+          <WifiOff className="w-8 h-8 text-amber-400 flex-shrink-0" />
+          <div>
+            <h4 className="font-bold">Offline Syncing</h4>
+            <p className="text-zinc-400 text-sm">Results are being saved locally. They will auto-sync once connected.</p>
+          </div>
+        </div>
+      )}
+
       <AnimatePresence>
         {showWelcome && (
           <motion.div
