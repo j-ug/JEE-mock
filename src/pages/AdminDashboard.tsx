@@ -121,7 +121,7 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
   const deleteHoldIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const examDraftRef = useRef({
     title: '',
-    duration: '180',
+    duration: '180.00',
     startTime: '',
     endTime: '',
     sections: {
