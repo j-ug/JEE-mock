@@ -34,10 +34,10 @@ import { cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
 import { ResponsiveContainer, XAxis, YAxis, Tooltip, CartesianGrid, AreaChart, Area, BarChart, Bar, Cell } from 'recharts';
 import SettingsModal from '../components/SettingsModal';
+import { ReviewButton } from '../components/ReviewButton';
 import { auth } from '../lib/firebase';
 import { authenticateGoogle, createSpreadsheet, populateSpreadsheet } from '../lib/googleSheets';
 import { downloadLocalDoc, createGoogleDocInDrive } from '../lib/googleDocs';
-import SurfWithAI from '../components/SurfWithAI';
 
 interface StudentDashboardProps {
   onStartTest: (examId: string) => void;
@@ -49,10 +49,10 @@ export default function StudentDashboard({ onStartTest }: StudentDashboardProps)
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [reviewExam, setReviewExam] = useState<{exam: Exam, sub: Submission} | null>(null);
-  const [docExportState, setDocExportState] = useState<{ exam: Exam, studentName?: string, studentEmail?: string } | null>(null);
+  const [docExportState, setDocExportState] = useState<{ exam: Exam, studentName?: string, studentEmail?: string, submission?: Submission } | null>(null);
   const [isCreatingDocs, setIsCreatingDocs] = useState(false);
   const [createdDocUrl, setCreatedDocUrl] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'hub' | 'exams' | 'history' | 'compare' | 'integrity' | 'report' | 'surf'>('hub');
+  const [activeTab, setActiveTab] = useState<'hub' | 'exams' | 'compare' | 'integrity' | 'report'>('hub');
   const [allSubmissions, setAllSubmissions] = useState<Submission[]>([]);
   const [allUsers, setAllUsers] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
@@ -79,170 +79,9 @@ export default function StudentDashboard({ onStartTest }: StudentDashboardProps)
     error: null
   });
 
-  const [summaryExportState, setSummaryExportState] = useState<{ isLoading: boolean; url: string | null; error: string | null }>({
-    isLoading: false,
-    url: null,
-    error: null
-  });
-
   useEffect(() => {
     setExportState({ isLoading: false, url: null, error: null });
   }, [reviewExam]);
-
-  const handleExportAssessment = async (exam: Exam, sub: Submission) => {
-    setExportState({ isLoading: true, url: null, error: null });
-    try {
-      const accessToken = await authenticateGoogle();
-      
-      const res = calculateSubmissionScore(exam, sub);
-      const correct = sub.correctCount ?? res.correct;
-      const incorrect = sub.incorrectCount ?? res.incorrect;
-      const skipped = sub.skippedCount ?? res.skipped;
-      const score = sub.score ?? res.score;
-      const accuracy = correct + incorrect > 0 ? Math.round((correct / (correct + incorrect)) * 100) : 0;
-      const formattedDate = sub.submittedAt 
-        ? format(sub.submittedAt.toDate(), 'yyyy-MM-dd HH:mm')
-        : format(new Date(), 'yyyy-MM-dd HH:mm');
-
-      const sheetTitle = `Conqueror Assessment: ${exam.title}`;
-      
-      const payload = [
-        ["CONQUEROR PREPARATION PLATFORM - ASSESSMENT ANALYSIS REPORT"],
-        [],
-        ["Candidate Name:", profile?.displayName || "Unknown Candidate"],
-        ["Candidate Email:", profile?.email || "Unknown Email"],
-        ["Assessment Title:", exam.title],
-        ["Attempt Date:", formattedDate],
-        ["Net Score:", `${score} / 300`],
-        ["Accuracy Index:", `${accuracy}%`],
-        ["Attempt Summary:", `${correct + incorrect} Questions Attempted (Correct: ${correct}, Incorrect: ${incorrect}, Skipped: ${skipped})`],
-        [],
-        [],
-        ["Sl.No.", "Section", "Question Type", "Question ID", "Question Text", "Correct Option", "Selected Option", "Status", "Marking Awarded", "Time Spent"]
-      ];
-
-      let serial = 1;
-
-      if (exam.sections) {
-        Object.entries(exam.sections).forEach(([sectionName, section]: [string, any]) => {
-          const mcqs = section.mcqs || [];
-          const numericals = section.numericals || [];
-          
-          const allQuestions = [
-            ...mcqs.map((q: any) => ({ ...q, type: 'Multiple Choice (MCQ)' })),
-            ...numericals.map((q: any) => ({ ...q, type: 'Numerical Value' }))
-          ];
-
-          allQuestions.forEach((q: any) => {
-            const ans = sub.answers?.[q.id];
-            const correctOption = exam.answerKey[q.id];
-            const isAttempted = ans?.status === 'attempted' || ans?.status === 'marked';
-            const isCorrect = isAttempted && (
-              typeof correctOption === 'number' 
-                ? Math.abs(Number(ans?.value) - Number(correctOption)) < 0.01 
-                : String(ans?.value || '').trim().toUpperCase() === String(correctOption || '').trim().toUpperCase()
-            );
-
-            let statusString = 'Skipped / Unattempted';
-            let pMarking = 0;
-            if (isAttempted) {
-              if (isCorrect) {
-                statusString = 'Correct Answer';
-                pMarking = 4;
-              } else {
-                statusString = 'Incorrect Answer';
-                pMarking = -1;
-              }
-            }
-
-            const timeSpentStr = ans?.timeSpent 
-              ? `${Math.floor(ans.timeSpent / 60)}m ${ans.timeSpent % 60}s`
-              : 'N/A';
-
-            payload.push([
-              serial++,
-              sectionName,
-              q.type,
-              q.id,
-              q.text || '',
-              String(correctOption ?? ''),
-              String(ans?.value ?? 'VOID'),
-              statusString,
-              pMarking,
-              timeSpentStr
-            ]);
-          });
-        });
-      }
-
-      const spreadsheet = await createSpreadsheet(sheetTitle, accessToken);
-      await populateSpreadsheet(spreadsheet.id, 'Sheet1!A1', payload, accessToken);
-      
-      setExportState({ isLoading: false, url: spreadsheet.url, error: null });
-    } catch (err: any) {
-      console.error(err);
-      setExportState({ isLoading: false, url: null, error: err.message || 'Export failed' });
-      alert('Google Sheets export failed: ' + (err.message || 'Authorized failed or network error'));
-    }
-  };
-
-  const handleExportHistorySummary = async () => {
-    setSummaryExportState({ isLoading: true, url: null, error: null });
-    try {
-      const accessToken = await authenticateGoogle();
-      
-      const completedSubmissions = submissions.filter(s => s.status === 'completed');
-      const totalTaken = completedSubmissions.length;
-      
-      const payload = [
-        ["CONQUEROR PREPARATION PLATFORM - DETAILED ASSESSMENT HISTORY SUMMARY"],
-        [],
-        ["Candidate Name:", profile?.displayName || "Unknown Candidate"],
-        ["Candidate Email:", profile?.email || "Unknown Email"],
-        ["Sync Date:", format(new Date(), 'yyyy-MM-dd HH:mm')],
-        ["Total Assessments Attempted:", totalTaken],
-        [],
-        [],
-        ["Sl.No.", "Diagnostic Session (Exam Name)", "Date Attempted", "Attempted", "Correct Answers", "Incorrect Answers", "Skipped", "Net Score / 300", "Accuracy"]
-      ];
-
-      completedSubmissions
-        .sort((a, b) => (b.submittedAt?.toMillis() || 0) - (a.submittedAt?.toMillis() || 0))
-        .forEach((sub, idx) => {
-          const exam = exams.find(e => e.id === sub.examId);
-          const resRaw = exam ? calculateSubmissionScore(exam, sub) : null;
-          const correct = sub.correctCount ?? resRaw?.correct ?? 0;
-          const incorrect = sub.incorrectCount ?? resRaw?.incorrect ?? 0;
-          const skipped = sub.skippedCount ?? resRaw?.skipped ?? 0;
-          const score = sub.score ?? resRaw?.score ?? 0;
-          const accuracy = correct + incorrect > 0 ? Math.round((correct / (correct + incorrect)) * 100) : 0;
-          const dateFormatted = sub.submittedAt 
-            ? format(sub.submittedAt.toDate(), 'yyyy-MM-dd HH:mm')
-            : 'Unknown';
-
-          payload.push([
-            idx + 1,
-            exam?.title || 'Unknown Exam',
-            dateFormatted,
-            correct + incorrect,
-            correct,
-            incorrect,
-            skipped,
-            score,
-            `${accuracy}%`
-          ]);
-        });
-
-      const spreadsheet = await createSpreadsheet(`Conqueror Assessment History: ${profile?.displayName || "Candidate"}`, accessToken);
-      await populateSpreadsheet(spreadsheet.id, 'Sheet1!A1', payload, accessToken);
-      
-      setSummaryExportState({ isLoading: false, url: spreadsheet.url, error: null });
-    } catch (err: any) {
-      console.error(err);
-      setSummaryExportState({ isLoading: false, url: null, error: err.message || 'Export failed' });
-      alert('Google Sheets export failed: ' + (err.message || 'Authorized failed or network error'));
-    }
-  };
 
   const handleGmailVerification = async () => {
     setIsVerifyingGmail(true);
@@ -252,6 +91,8 @@ export default function StudentDashboard({ onStartTest }: StudentDashboardProps)
       const provider = new GoogleAuthProvider();
       provider.addScope('https://www.googleapis.com/auth/spreadsheets');
       provider.addScope('https://www.googleapis.com/auth/drive.file');
+      provider.addScope('https://www.googleapis.com/auth/gmail.readonly');
+      provider.addScope('https://www.googleapis.com/auth/gmail.send');
       
       const result = await signInWithPopup(auth, provider);
       const credential = GoogleAuthProvider.credentialFromResult(result);
@@ -716,7 +557,8 @@ export default function StudentDashboard({ onStartTest }: StudentDashboardProps)
                       const docUrl = await createGoogleDocInDrive(
                         docExportState.exam, 
                         docExportState.studentName, 
-                        docExportState.studentEmail
+                        docExportState.studentEmail,
+                        docExportState.submission
                       );
                       setCreatedDocUrl(docUrl);
                       window.open(docUrl, '_blank');
@@ -746,7 +588,8 @@ export default function StudentDashboard({ onStartTest }: StudentDashboardProps)
                     downloadLocalDoc(
                       docExportState.exam, 
                       docExportState.studentName, 
-                      docExportState.studentEmail
+                      docExportState.studentEmail,
+                      docExportState.submission
                     );
                     setDocExportState(null);
                   }}
@@ -883,41 +726,13 @@ export default function StudentDashboard({ onStartTest }: StudentDashboardProps)
                       <Sparkles size={16} /> My POV Audit ({reviewExam.sub.integrityPhotos.length})
                     </button>
                   )}
-                  {exportState.url ? (
-                    <a
-                      href={exportState.url}
-                      target="_blank"
-                      rel="noreferrer noopener"
-                      className="flex items-center gap-3 px-6 py-4 bg-green-600 text-white hover:bg-green-700 rounded-3xl font-black text-[10px] uppercase tracking-widest transition-all shadow-lg animate-pulse whitespace-nowrap"
-                    >
-                      <ArrowUpRight size={16} /> View Excel on Google Sheets
-                    </a>
-                  ) : (
-                    <button
-                      onClick={() => handleExportAssessment(reviewExam.exam, reviewExam.sub)}
-                      disabled={exportState.isLoading}
-                      className="flex items-center gap-3 px-6 py-4 bg-green-50 hover:bg-green-100 text-green-700 border border-green-200 rounded-3xl font-black text-[10px] uppercase tracking-widest transition-all disabled:opacity-50 whitespace-nowrap"
-                    >
-                      {exportState.isLoading ? (
-                        <>
-                          <Loader2 className="w-4 h-4 animate-spin text-green-600" />
-                          Creating Sheet...
-                        </>
-                      ) : (
-                        <>
-                          <FileText className="text-green-600" size={16} />
-                          Export to Google Sheets
-                        </>
-                      )}
-                    </button>
-                  )}
-
                   <button
                     onClick={() => {
                       setDocExportState({
                         exam: reviewExam.exam,
                         studentName: profile?.displayName,
-                        studentEmail: profile?.email
+                        studentEmail: profile?.email,
+                        submission: reviewExam.sub
                       });
                       setCreatedDocUrl(null);
                     }}
@@ -1187,9 +1002,7 @@ export default function StudentDashboard({ onStartTest }: StudentDashboardProps)
             {[
               { id: 'hub', label: 'Dashboard' },
               { id: 'exams', label: 'Mock Tests' },
-              { id: 'compare', label: 'Compare Success' },
-              { id: 'history', label: 'Assessment History' },
-              { id: 'surf', label: 'Surf with AI' }
+              { id: 'compare', label: 'Compare Success' }
             ].map((item) => (
               <button 
                 key={item.id} 
@@ -1209,9 +1022,7 @@ export default function StudentDashboard({ onStartTest }: StudentDashboardProps)
             {[
               { id: 'hub', icon: <LayoutDashboard size={18} /> },
               { id: 'exams', icon: <BrainCircuit size={18} /> },
-              { id: 'compare', icon: <BarChart3 size={18} /> },
-              { id: 'history', icon: <History size={18} /> },
-              { id: 'surf', icon: <Globe size={18} /> }
+              { id: 'compare', icon: <BarChart3 size={18} /> }
             ].map((item) => (
               <button 
                 key={item.id} 
@@ -1332,7 +1143,7 @@ export default function StudentDashboard({ onStartTest }: StudentDashboardProps)
               exit={{ opacity: 0, y: -20 }}
               className="space-y-12"
             >
-              <div className="flex justify-between items-end mb-12">
+               <div className="flex justify-between items-end mb-12">
                 <div>
                   <h2 className="text-[10px] font-black text-blue-600 uppercase tracking-[0.4em] mb-4">Neural Benchmarking Hub</h2>
                   <h1 className="text-6xl font-black italic tracking-tighter uppercase leading-none">Compare Performance</h1>
@@ -1345,6 +1156,7 @@ export default function StudentDashboard({ onStartTest }: StudentDashboardProps)
                   </div>
                 </div>
               </div>
+              
 
               <div className="grid grid-cols-1 gap-12">
                 <div className="space-y-12">
@@ -1455,69 +1267,7 @@ export default function StudentDashboard({ onStartTest }: StudentDashboardProps)
                 </div>
 
                 <div className="lg:col-span-4 space-y-12">
-                   <section className="bg-slate-900 rounded-[48px] p-12 text-white border border-slate-800 shadow-2xl relative overflow-hidden">
-                      <div className="absolute top-0 right-0 w-32 h-32 bg-blue-600 rounded-full blur-[100px] opacity-20" />
-                      <h3 className="text-xs font-black text-blue-400 uppercase tracking-[0.3em] mb-10 italic">Neural Rank Distribution</h3>
-                      
-                      <div className="space-y-6">
-                        {exams.map(exam => {
-                          const examSubs = [...allSubmissions.filter(s => s.examId === exam.id)].sort((a,b) => (b.score ?? 0) - (a.score ?? 0));
-                          const myRank = examSubs.findIndex(s => s.userId === profile?.uid) + 1;
-                          
-                          if (examSubs.length === 0) return null;
 
-                          return (
-                            <div key={exam.id} className="space-y-4">
-                              <div className="flex items-center justify-between p-6 bg-white/5 border border-white/10 rounded-3xl group">
-                                <div className="flex items-center gap-4">
-                                    <div className={cn(
-                                      "w-10 h-10 rounded-xl flex items-center justify-center font-black text-xs",
-                                      myRank === 1 ? "bg-blue-600 text-white" : "bg-white/10 text-slate-400"
-                                    )}>
-                                      #{myRank || 'N/A'}
-                                    </div>
-                                    <div>
-                                      <p className="text-xs font-black uppercase tracking-tight truncate w-32">{exam.title}</p>
-                                      <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mt-1">Global Precision Rank</p>
-                                    </div>
-                                </div>
-                                <div className="text-right">
-                                    <p className="text-lg font-black text-blue-400 tracking-tighter leading-none italic">{myRank > 0 ? (examSubs[myRank-1].score ?? '--') : '--'}</p>
-                                </div>
-                              </div>
-                              
-                              {/* Top 10 for this exam */}
-                              <div className="px-4 space-y-2">
-                                {examSubs.slice(0, 10).map((topSub, sIdx) => (
-                                  <div key={topSub.id} className="flex items-center justify-between py-2 border-b border-white/5 last:border-0 opacity-60 hover:opacity-100 transition-opacity">
-                                    <div className="flex items-center gap-3 overflow-hidden">
-                                      <span className="text-[9px] font-black text-blue-400 shrink-0">{sIdx + 1 < 10 ? `0${sIdx + 1}` : sIdx + 1}</span>
-                                      <span className="text-[10px] font-bold text-slate-300 uppercase tracking-widest truncate">
-                                        {allUsers[topSub.userId] || topSub.userName || `ID_${topSub.userId.slice(0, 4)}...`}
-                                        {topSub.userId === profile?.uid && <span className="ml-2 text-blue-400 text-[8px] font-black underline shrink-0">(YOU)</span>}
-                                      </span>
-                                    </div>
-                                    <span className="text-[11px] font-black text-white ml-2 shrink-0">{topSub.score}</span>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-
-                      <div className="mt-12 pt-12 border-t border-white/10">
-                        <div className="flex items-center gap-4">
-                           <div className="w-12 h-12 bg-blue-500/20 rounded-2xl flex items-center justify-center text-blue-400">
-                             <Sparkles size={24} />
-                           </div>
-                           <div>
-                              <p className="text-[10px] font-black text-blue-400 uppercase tracking-widest mb-1 italic">Optimization Node</p>
-                              <p className="text-xs font-bold text-slate-400 uppercase leading-snug">Ranks are calculated live across all diagnostic cycles.</p>
-                           </div>
-                        </div>
-                      </div>
-                   </section>
 
                    <section className="bg-white border border-slate-200 rounded-[48px] p-12 shadow-sm">
                       <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.3em] mb-8">Performance Insight</h3>
@@ -2038,136 +1788,6 @@ export default function StudentDashboard({ onStartTest }: StudentDashboardProps)
                 </div>
               </div>
             </motion.div>
-          ) : activeTab === 'history' ? (
-            <motion.div 
-              key="history"
-          initial={{ opacity: 0, scale: 0.98 }}
-          animate={{ opacity: 1, scale: 1 }}
-          exit={{ opacity: 0, scale: 0.98 }}
-          className="space-y-12 max-w-[1400px] mx-auto"
-        >
-          <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6 mb-4 text-left px-6">
-            <div>
-              <h2 className="text-[10px] font-black text-blue-600 uppercase tracking-[0.4em] mb-2">Neural Archive Sync</h2>
-              <h1 className="text-5xl font-black italic tracking-tighter uppercase leading-none">Assessment History</h1>
-            </div>
-            <div className="flex flex-wrap items-center gap-4">
-              {summaryExportState.url ? (
-                <a
-                  href={summaryExportState.url}
-                  target="_blank"
-                  rel="noreferrer noopener"
-                  className="bg-green-600 hover:bg-green-700 text-white px-8 py-4 rounded-3xl flex items-center gap-3 text-[10px] font-black uppercase tracking-widest transition-all animate-pulse shadow-md whitespace-nowrap"
-                >
-                  <ArrowUpRight size={18} />
-                  View Summary on Sheets
-                </a>
-              ) : (
-                <button
-                  onClick={() => handleExportHistorySummary()}
-                  disabled={summaryExportState.isLoading}
-                  className="bg-green-50 border border-green-200 text-green-700 hover:bg-green-100 px-8 py-4 rounded-3xl flex items-center gap-3 text-[10px] font-black uppercase tracking-widest transition-all disabled:opacity-50 whitespace-nowrap"
-                >
-                  {summaryExportState.isLoading ? (
-                    <>
-                      <Loader2 className="w-5 h-5 animate-spin text-green-600" />
-                      Syncing Summary...
-                    </>
-                  ) : (
-                    <>
-                      <FileText className="text-green-600" size={18} />
-                      Export Summary to Sheets
-                    </>
-                  )}
-                </button>
-              )}
-              <div className="bg-slate-900 text-white px-8 py-4 rounded-3xl flex items-center gap-4">
-                <History className="text-blue-400" size={24} />
-                <div>
-                  <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest leading-none mb-1">Archived Cycles</p>
-                  <p className="text-2xl font-black tracking-tighter leading-none">{submissions.filter(s => s.status === 'completed').length}</p>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-[48px] border border-slate-200 shadow-2xl overflow-hidden text-left mx-6">
-            <div className="overflow-x-auto">
-               <table className="w-full">
-                  <thead className="bg-slate-50 border-b border-slate-100">
-                     <tr>
-                        <th className="px-10 py-6 text-[11px] font-black text-slate-400 uppercase tracking-widest">Diagnostic Session</th>
-                        <th className="px-10 py-6 text-[11px] font-black text-slate-400 uppercase tracking-widest text-center">Attempted</th>
-                        <th className="px-10 py-6 text-[11px] font-black text-slate-400 uppercase tracking-widest text-center text-green-600">Correct</th>
-                        <th className="px-10 py-6 text-[11px] font-black text-slate-400 uppercase tracking-widest text-center text-red-500">Incorrect</th>
-                        <th className="px-10 py-6 text-[11px] font-black text-slate-400 uppercase tracking-widest text-center">Skipped</th>
-                        <th className="px-10 py-6 text-[11px] font-black text-slate-400 uppercase tracking-widest text-center">Net Score</th>
-                        <th className="px-10 py-6 text-[11px] font-black text-slate-400 uppercase tracking-widest text-right">Protocol</th>
-                     </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-50 font-mono">
-                     {submissions
-                        .filter(s => s.status === 'completed')
-                        .sort((a, b) => (b.submittedAt?.toMillis() || 0) - (a.submittedAt?.toMillis() || 0))
-                        .map((sub, idx) => {
-                           const exam = exams.find(e => e.id === sub.examId);
-                           const resRaw = exam ? calculateSubmissionScore(exam, sub) : null;
-                           const correct = sub.correctCount ?? resRaw?.correct ?? 0;
-                           const incorrect = sub.incorrectCount ?? resRaw?.incorrect ?? 0;
-                           const skipped = sub.skippedCount ?? resRaw?.skipped ?? 0;
-                           const score = sub.score ?? resRaw?.score ?? 0;
-                           const totalQuestions = correct + incorrect + skipped;
-                           
-                           return (
-                              <React.Fragment key={sub.id}>
-                                <tr className="hover:bg-blue-50/30 transition-colors group">
-                                   <td className="px-10 py-8">
-                                      <p className="text-base font-black text-slate-800 uppercase italic leading-none mb-1">{exam?.title || 'Unknown Exam'}</p>
-                                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{format(sub.submittedAt?.toDate() || new Date(), 'MMM d, yyyy HH:mm')}</p>
-                                   </td>
-                                   <td className="px-10 py-8 text-center text-lg font-black text-slate-500">{correct + incorrect}</td>
-                                   <td className="px-10 py-8 text-center text-lg font-black text-green-600">+{correct}</td>
-                                   <td className="px-10 py-8 text-center text-lg font-black text-red-500">-{incorrect}</td>
-                                   <td className="px-10 py-8 text-center text-lg font-black text-slate-300">{skipped}</td>
-                                   <td className="px-10 py-8 text-center">
-                                      <div className="flex flex-col items-center">
-                                         <span className="text-2xl font-black text-blue-600 italic tracking-tighter">{score}</span>
-                                         <div className="w-16 h-1 bg-slate-100 rounded-full mt-1 overflow-hidden">
-                                            <div className="h-full bg-blue-600" style={{ width: `${Math.max(0, Math.min(100, (score/300)*100))}%` }} />
-                                         </div>
-                                      </div>
-                                   </td>
-                                   <td className="px-10 py-8 text-right">
-                                      <button 
-                                        onClick={() => exam && setReviewExam({exam, sub})}
-                                        className="px-6 py-3 bg-slate-900 text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-blue-600 transition-all active:scale-95 shadow-xl shadow-slate-900/10 group-hover:shadow-blue-500/20"
-                                      >
-                                         Details
-                                      </button>
-                                   </td>
-                                </tr>
-                                {idx === 0 && (
-                                  <tr className="bg-slate-50 border-b border-slate-100">
-                                    <td colSpan={7} className="px-10 py-4 text-[9px] font-black text-slate-400 uppercase tracking-widest italic">
-                                      Latest Assessment Insight: {correct > (totalQuestions/2) ? 'Excellent Accuracy Detected' : 'Diagnostic Review Recommended'} • {incorrect > 5 ? 'Negative Marking High' : 'Strategic Control Stable'}
-                                    </td>
-                                  </tr>
-                                )}
-                              </React.Fragment>
-                           );
-                        })
-                     }
-                  </tbody>
-               </table>
-               {submissions.filter(s => s.status === 'completed').length === 0 && (
-                  <div className="py-32 text-center">
-                     <BrainCircuit size={48} className="mx-auto text-slate-200 mb-6" />
-                     <p className="text-slate-400 font-black uppercase tracking-[0.3em] text-sm italic">No neural data found in archival servers</p>
-                  </div>
-               )}
-            </div>
-          </div>
-            </motion.div>
           ) : activeTab === 'exams' ? (
             <motion.div 
               key="exams"
@@ -2254,17 +1874,18 @@ export default function StudentDashboard({ onStartTest }: StudentDashboardProps)
              })}
           </div>
             </motion.div>
-          ) : activeTab === 'surf' ? (
+          ) : false && activeTab === 'surf' ? (
             <motion.div
               key="surf"
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
             >
-              <SurfWithAI />
+              null
             </motion.div>
           ) : null}
         </AnimatePresence>
+  <ReviewButton />
   </main>
     </div>
   );

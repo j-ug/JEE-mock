@@ -1,10 +1,17 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { doc, getDoc, setDoc, serverTimestamp, updateDoc, arrayUnion } from 'firebase/firestore';
+import { doc, getDoc, setDoc, serverTimestamp, updateDoc, arrayUnion, increment } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { handleFirestoreError, OperationType } from '../lib/firestoreUtils';
 import { useAuth } from '../context/AuthContext';
 import { Exam, Submission, SubmissionResponse, ExamSection } from '../types';
 import { calculateSubmissionScore } from '../lib/scoreUtils';
+import {
+  Document,
+  Packer,
+  Paragraph,
+  TextRun,
+  HeadingLevel
+} from 'docx';
 import { 
   Timer, 
   ChevronLeft, 
@@ -16,7 +23,8 @@ import {
   ShieldCheck,
   Zap,
   CheckCircle2,
-  Bookmark
+  Bookmark,
+  FileDown
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
@@ -34,6 +42,7 @@ export default function TestInterface({ examId, onExit }: TestInterfaceProps) {
   const [activeSection, setActiveSection] = useState<'Maths' | 'Physics' | 'Chemistry'>('Maths');
   const [activeQuestionIdx, setActiveQuestionIdx] = useState(0); 
   const [answers, setAnswers] = useState<Record<string, SubmissionResponse>>({});
+  const [sectionTimeSpent, setSectionTimeSpent] = useState<Record<string, number>>({});
   const [timeLeft, setTimeLeft] = useState(3 * 60 * 60);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showResult, setShowResult] = useState(false);
@@ -248,7 +257,7 @@ export default function TestInterface({ examId, onExit }: TestInterfaceProps) {
       const subId = `${profile.uid}_${examId}`;
       
       // Perform Firestore update in background
-      setDoc(doc(db, 'submissions', subId), {
+      await setDoc(doc(db, 'submissions', subId), {
         userId: profile.uid,
         userName: profile.role === 'admin' ? 'Admin Testing' : profile.displayName,
         examId: examId,
@@ -261,8 +270,10 @@ export default function TestInterface({ examId, onExit }: TestInterfaceProps) {
         status: 'completed',
         submittedAt: serverTimestamp(),
         updatedAt: serverTimestamp()
-      }, { merge: true }).catch(error => {
-        console.error('TRANS_SEQ: BACKGROUND_SYNC_FAILURE:', error);
+      }, { merge: true });
+      
+      await updateDoc(doc(db, 'exams', examId), {
+        submissionCount: increment(1)
       });
     } catch (error) {
       console.error('TRANS_SEQ: CRITICAL_FAILURE:', error);
@@ -326,6 +337,36 @@ export default function TestInterface({ examId, onExit }: TestInterfaceProps) {
     return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
+  const formatTimeShort = (seconds: number) => {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  };
+
+  const downloadWordDoc = async () => {
+    if (!exam) return;
+    const doc = new Document({
+      sections: [{
+        children: [
+          new Paragraph({ text: exam.title, heading: HeadingLevel.HEADING_1 }),
+          ...Object.entries(exam.sections).flatMap(([name, section]: [string, any]) => [
+            new Paragraph({ text: name, heading: HeadingLevel.HEADING_2 }),
+            ...(section.mcqs || []).map((q: any) => new Paragraph({ text: q.text })),
+            ...(section.numericals || []).map((q: any) => new Paragraph({ text: q.text }))
+          ])
+        ]
+      }]
+    });
+
+    const blob = await Packer.toBlob(doc);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${exam.title}.docx`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   const currentQuestions = React.useMemo(() => exam ? [
     ...exam.sections[activeSection].mcqs,
     ...exam.sections[activeSection].numericals
@@ -346,7 +387,7 @@ export default function TestInterface({ examId, onExit }: TestInterfaceProps) {
         return prev - 1;
       });
 
-      // Increment time spent on current question
+      // Increment time spent on current question and section
       if (currentQuestion) {
         setAnswers(prev => {
           const qId = currentQuestion.id;
@@ -359,6 +400,11 @@ export default function TestInterface({ examId, onExit }: TestInterfaceProps) {
             }
           };
         });
+
+        setSectionTimeSpent(prev => ({
+          ...prev,
+          [activeSection]: (prev[activeSection] || 0) + 1
+        }));
       }
     }, 1000);
 
@@ -643,6 +689,13 @@ export default function TestInterface({ examId, onExit }: TestInterfaceProps) {
           </div>
 
           <button 
+            onClick={onExit}
+            className="mb-8 flex items-center justify-center gap-2 text-slate-500 hover:text-white font-black uppercase tracking-widest transition-all text-sm"
+          >
+            <ChevronLeft size={20} /> Return to Hub
+          </button>
+
+          <button 
             onClick={enterFullscreen}
             className="group relative bg-white text-slate-950 px-12 py-6 rounded-3xl font-black text-2xl uppercase tracking-widest transition-all hover:-translate-y-2 active:translate-y-0"
           >
@@ -713,13 +766,28 @@ export default function TestInterface({ examId, onExit }: TestInterfaceProps) {
 
         <div className="flex items-center gap-2 md:gap-10">
           <div className="flex items-center gap-1 md:gap-4 bg-slate-900 border border-slate-800 rounded-lg md:rounded-3xl p-1 md:p-2 px-2 md:px-6">
-            <Timer size={12} className={cn("md:w-5 md:h-5", timeLeft < 600 ? "text-red-500 animate-pulse" : "text-blue-500")} />
+            <Timer size={12} className={cn("md:w-5 md:h-5", timeLeft < 300 ? "text-red-600 animate-pulse scale-125" : timeLeft < 600 ? "text-red-500 animate-pulse" : "text-blue-500")} />
             <span className={cn(
               "text-xs md:text-2xl font-black font-mono tracking-tighter w-16 md:w-32 text-center",
-              timeLeft < 600 ? "text-red-500" : "text-white"
+              timeLeft < 300 ? "text-red-600 font-bold" : timeLeft < 600 ? "text-red-500" : "text-white"
             )}>{formatTime(timeLeft)}</span>
           </div>
+
+          {/* Critical Time Warning */}
+          {timeLeft <= 300 && (
+             <div className="absolute top-16 right-5 bg-red-600 text-white px-4 py-2 rounded-full font-black text-xs uppercase animate-bounce z-[100]">
+               Critical Time: {Math.ceil(timeLeft/60)}m
+             </div>
+          )}
           
+          <button 
+             onClick={downloadWordDoc}
+             className="bg-purple-600 hover:bg-purple-700 h-8 md:h-14 px-3 md:px-6 rounded-lg md:rounded-2xl font-black text-[8px] md:text-sm uppercase tracking-widest shadow-xl shadow-purple-600/20 transition-all text-white flex items-center gap-2"
+           >
+             <FileDown size={16} />
+             <span className="hidden md:inline">DOWNLOAD WORD</span>
+           </button>
+
           <button 
             onClick={() => setShowConfirmModal(true)}
             className="bg-blue-600 hover:bg-blue-700 h-8 md:h-14 px-3 md:px-10 rounded-lg md:rounded-2xl font-black text-[8px] md:text-sm uppercase tracking-widest shadow-xl shadow-blue-600/20 transition-all"
@@ -949,6 +1017,16 @@ export default function TestInterface({ examId, onExit }: TestInterfaceProps) {
             </div>
           </div>
           <div className="flex-1 p-6 md:p-10 overflow-y-auto custom-scrollbar">
+            <div className="mb-6 grid grid-cols-2 gap-4">
+              <div className="bg-slate-50 p-4 rounded-xl">
+                 <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1">Section Time</p>
+                 <p className="text-sm font-black text-slate-800 font-mono">{formatTimeShort(sectionTimeSpent[activeSection] || 0)}</p>
+              </div>
+              <div className="bg-slate-50 p-4 rounded-xl">
+                 <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1">Question Time</p>
+                 <p className="text-sm font-black text-slate-800 font-mono">{formatTimeShort(currentQuestion ? (answers[currentQuestion.id]?.timeSpent || 0) : 0)}</p>
+              </div>
+            </div>
             <h3 className="text-[8px] md:text-[10px] font-black text-slate-400 uppercase tracking-[0.3em] mb-4 md:mb-8 flex items-center gap-3">
               <BrainCircuit size={14} className="md:w-4 md:h-4" strokeWidth={3} /> Interaction Grid
             </h3>

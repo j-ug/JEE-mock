@@ -1,9 +1,9 @@
 import { format } from 'date-fns';
-import { Exam, Question } from '../types';
+import { Exam, Question, Submission } from '../types';
 import { authenticateGoogle } from './googleSheets';
 
 // Helper to generate text format for Google Docs
-export function generateQuestionPaperPlainText(exam: Exam, studentName?: string, studentEmail?: string): string {
+export function generateQuestionPaperPlainText(exam: Exam, studentName?: string, studentEmail?: string, submission?: Submission): string {
   let text = '';
   text += `========================================================================\n`;
   text += `  ${exam.title.toUpperCase()}\n`;
@@ -37,7 +37,9 @@ export function generateQuestionPaperPlainText(exam: Exam, studentName?: string,
         if (q.options && q.options.length > 0) {
           const labels = ['A', 'B', 'C', 'D', 'E', 'F'];
           q.options.forEach((opt: string, oIdx: number) => {
-            text += `   ${labels[oIdx] || oIdx + 1}) ${opt}\n`;
+            const studentAnswer = submission?.answers?.[q.id]?.value;
+            const isSelected = String(studentAnswer).toUpperCase() === labels[oIdx];
+            text += `   ${isSelected ? '[SELECTED] ' : ' '}${labels[oIdx] || oIdx + 1}) ${opt}\n`;
           });
         }
         text += `\n`;
@@ -49,7 +51,8 @@ export function generateQuestionPaperPlainText(exam: Exam, studentName?: string,
       numericals.forEach((q: Question) => {
         text += `Q${qSerialGlobal++}. [NUMERICAL] [ID: ${q.id}]\n`;
         text += `${q.text}\n`;
-        text += `   (Write your numerical response in the space provided / online interface)\n\n`;
+        const studentAnswer = submission?.answers?.[q.id]?.value;
+        text += `   Response: ${studentAnswer ?? '(Left blank)'}\n\n`;
       });
     }
   });
@@ -87,7 +90,7 @@ export function generateQuestionPaperPlainText(exam: Exam, studentName?: string,
 }
 
 // Helper to generate full rich HTML format for downloadable Doc
-export function generateQuestionPaperHTML(exam: Exam, studentName?: string, studentEmail?: string): string {
+export function generateQuestionPaperHTML(exam: Exam, studentName?: string, studentEmail?: string, submission?: Submission): string {
   let serial = 1;
   let qHtml = '';
 
@@ -111,7 +114,9 @@ export function generateQuestionPaperHTML(exam: Exam, studentName?: string, stud
           qHtml += `<ul class="options-list">`;
           const labels = ['A', 'B', 'C', 'D'];
           q.options.forEach((opt: string, oIdx: number) => {
-            qHtml += `<li class="option-item"><strong>${labels[oIdx] || oIdx + 1})</strong> ${opt}</li>`;
+            const studentAnswer = submission?.answers?.[q.id]?.value;
+            const isSelected = String(studentAnswer).toUpperCase() === labels[oIdx];
+            qHtml += `<li class="option-item ${isSelected ? 'selected-option' : ''}"><strong>${labels[oIdx] || oIdx + 1})</strong> ${opt}</li>`;
           });
           qHtml += `</ul>`;
         }
@@ -122,11 +127,12 @@ export function generateQuestionPaperHTML(exam: Exam, studentName?: string, stud
     if (numericals.length > 0) {
       qHtml += `<p class="part-header">Part B: Numerical Entry Questions</p>`;
       numericals.forEach((q: Question) => {
+        const studentAnswer = submission?.answers?.[q.id]?.value;
         qHtml += `
           <div class="question-block">
             <span class="question-num">Question ${serial++} [NUMERICAL] [ID: ${q.id}]</span>
             <div class="question-text">${q.text}</div>
-            <div style="margin-left: 15px; margin-top: 10px; border-bottom: 1px dotted #a0aec0; width: 250px; height: 25px;">Response: </div>
+            <div style="margin-left: 15px; margin-top: 10px; font-weight: bold; padding: 5px; border-bottom: 1px dotted #a0aec0; width: 250px; height: 25px;">Response: ${studentAnswer ?? '(Left blank)'}</div>
           </div>
         `;
       });
@@ -195,6 +201,7 @@ export function generateQuestionPaperHTML(exam: Exam, studentName?: string, stud
         .question-text { margin-left: 12px; font-size: 10.5pt; color: #334155; line-height: 1.6; }
         .options-list { margin-left: 15px; margin-top: 10px; list-style-type: none; padding-left: 0; }
         .option-item { margin-bottom: 6px; font-size: 10pt; color: #475569; padding-left: 8px; }
+        .selected-option { background-color: #fef08a; font-weight: bold; padding: 2px 4px; border-radius: 4px; }
         .page-break { page-break-before: always; }
         .answer-table { width: 100%; border-collapse: collapse; margin-top: 25px; }
         .answer-table th, .answer-table td { border: 1px solid #cbd5e0; padding: 12px 10px; text-align: left; font-size: 9.5pt; }
@@ -260,8 +267,8 @@ function hashString(str: string): string {
 }
 
 // Offline Download trigger
-export function downloadLocalDoc(exam: Exam, studentName?: string, studentEmail?: string) {
-  const htmlContent = generateQuestionPaperHTML(exam, studentName, studentEmail);
+export function downloadLocalDoc(exam: Exam, studentName?: string, studentEmail?: string, submission?: Submission) {
+  const htmlContent = generateQuestionPaperHTML(exam, studentName, studentEmail, submission);
   const blob = new Blob(['\ufeff' + htmlContent], { type: 'application/msword;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   
@@ -276,7 +283,7 @@ export function downloadLocalDoc(exam: Exam, studentName?: string, studentEmail?
 }
 
 // Google Docs API client calls
-export async function createGoogleDocInDrive(exam: Exam, studentName?: string, studentEmail?: string): Promise<string> {
+export async function createGoogleDocInDrive(exam: Exam, studentName?: string, studentEmail?: string, submission?: Submission): Promise<string> {
   // Uses authenticating from the sheets helper
   const token = await authenticateGoogle();
   
@@ -301,7 +308,7 @@ export async function createGoogleDocInDrive(exam: Exam, studentName?: string, s
   const documentId = docData.documentId;
 
   // 2. Build plain text payload
-  const plainText = generateQuestionPaperPlainText(exam, studentName, studentEmail);
+  const plainText = generateQuestionPaperPlainText(exam, studentName, studentEmail, submission);
 
   // 3. Insert text content
   const updateResponse = await fetch(`https://docs.googleapis.com/v1/documents/${documentId}:batchUpdate`, {

@@ -15,6 +15,8 @@ export interface UserProfile {
   lastSeen?: Timestamp;
   contactDetail?: string;
   review?: string;
+  performanceInsight?: string;
+  preparationType?: 'JEE' | 'NEET';
 }
 
 export interface Question {
@@ -48,6 +50,8 @@ export interface Exam {
   answerKey: Record<string, string | number>;
   createdBy: string;
   createdAt: Timestamp;
+  submissionCount?: number;
+  preparationType?: 'JEE' | 'NEET' | 'Both';
 }
 
 export interface SubmissionResponse {

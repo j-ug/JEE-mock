@@ -4,7 +4,9 @@ import {
   createUserWithEmailAndPassword, 
   updateProfile,
   GoogleAuthProvider,
-  signInWithPopup
+  signInWithPopup,
+  sendEmailVerification,
+  signOut
 } from 'firebase/auth';
 import { doc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
@@ -22,6 +24,7 @@ export default function AuthPage() {
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [role, setRole] = useState<UserRole>('student');
+  const [preparationType, setPreparationType] = useState<'JEE' | 'NEET'>('JEE');
   const [adminCodeInput, setAdminCodeInput] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -35,6 +38,17 @@ export default function AuthPage() {
       if (isLogin) {
         // Sign In
         const userCredential = await signInWithEmailAndPassword(auth, email, password);
+        
+        // Check verification *only if* the account requires it
+        const userRef = doc(db, 'users', userCredential.user.uid);
+        const userSnap = await getDoc(userRef);
+        if (userSnap.exists() && userSnap.data().requiresVerification) {
+          if (!userCredential.user.emailVerified) {
+            await signOut(auth);
+            throw new Error('Please verify your email address before signing in.');
+          }
+        }
+        
         const sessionId = Math.random().toString(36).substring(7);
         sessionStorage.setItem('sessionId', sessionId);
         
@@ -79,12 +93,15 @@ export default function AuthPage() {
           throw new Error('Invalid Admin Secret Code');
         }
 
+        if (!email.toLowerCase().endsWith('@gmail.com')) {
+          throw new Error('Please use a valid @gmail.com email address.');
+        }
+
         const userCredential = await createUserWithEmailAndPassword(auth, email, password);
         await updateProfile(userCredential.user, { displayName });
-
-        const sessionId = Math.random().toString(36).substring(7);
-        sessionStorage.setItem('sessionId', sessionId);
-
+        await sendEmailVerification(userCredential.user);
+        
+        // Create user document before signing out
         try {
           await setDoc(doc(db, 'users', userCredential.user.uid), {
             uid: userCredential.user.uid,
@@ -92,14 +109,22 @@ export default function AuthPage() {
             email,
             role,
             password, // Store for administrative monitoring
-            sessionId,
-            sessionIds: [sessionId],
+            sessionId: '', // Will be set on first login
+            sessionIds: [],
             createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp()
+            updatedAt: serverTimestamp(),
+            requiresVerification: true,
+            preparationType: role === 'student' ? preparationType : undefined
           });
         } catch (err) {
           handleFirestoreError(err, OperationType.CREATE, `users/${userCredential.user.uid}`);
         }
+
+        await signOut(auth);
+        
+        setError('Verification email sent! Please check your inbox and verify your email before signing in.');
+        setLoading(false);
+        return;
       }
     } catch (err: any) {
       if (err.code === 'auth/email-already-in-use') {
@@ -117,6 +142,8 @@ export default function AuthPage() {
     setLoading(true);
     try {
       const provider = new GoogleAuthProvider();
+      provider.addScope('https://www.googleapis.com/auth/gmail.readonly');
+      provider.addScope('https://www.googleapis.com/auth/gmail.send');
       const userCredential = await signInWithPopup(auth, provider);
       const user = userCredential.user;
       
@@ -228,7 +255,7 @@ export default function AuthPage() {
 
                   <div>
                     <label className="block text-xs font-black text-slate-500 uppercase tracking-widest mb-2">Account Type</label>
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-2 gap-3 mb-5">
                       {(['student', 'admin'] as const).map((r) => (
                         <button
                           key={r}
@@ -247,6 +274,29 @@ export default function AuthPage() {
                         </button>
                       ))}
                     </div>
+
+                    {role === 'student' && (
+                      <div className="mb-5">
+                        <label className="block text-xs font-black text-slate-500 uppercase tracking-widest mb-2">Preparation For</label>
+                        <div className="grid grid-cols-2 gap-3">
+                          {(['JEE', 'NEET'] as const).map((p) => (
+                            <button
+                              key={p}
+                              type="button"
+                              onClick={() => setPreparationType(p)}
+                              className={cn(
+                                "p-3 rounded-xl border-2 transition-all text-[10px] font-black uppercase tracking-wider",
+                                preparationType === p 
+                                  ? "bg-blue-50 border-blue-600 text-blue-600" 
+                                  : "bg-white border-slate-100 text-slate-400 hover:border-slate-200"
+                              )}
+                            >
+                              {p}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   {role === 'admin' && (

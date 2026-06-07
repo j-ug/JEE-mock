@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { updateProfile, updatePassword, User, deleteUser } from 'firebase/auth';
-import { doc, updateDoc, serverTimestamp, deleteDoc, collection, query, where, getDocs, writeBatch } from 'firebase/firestore';
+import { doc, updateDoc, serverTimestamp, deleteDoc, collection, query, where, getDocs, writeBatch, documentId } from 'firebase/firestore';
 import { db, auth } from '../lib/firebase';
 import { removeUndefined } from '../lib/firestoreUtils';
 import { UserProfile } from '../types';
@@ -55,8 +55,7 @@ export default function SettingsModal({ user, profile, onClose }: SettingsModalP
     }
   };
 
-  const handleUpdatePassword = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const performPasswordUpdate = async (sendNotification: boolean) => {
     if (!user) return;
 
     if (newPassword !== confirmPassword) {
@@ -75,6 +74,15 @@ export default function SettingsModal({ user, profile, onClose }: SettingsModalP
 
     try {
       await updatePassword(user, newPassword);
+      
+      if (sendNotification) {
+        await fetch('/api/notify-password-change', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ newPassword })
+        });
+      }
+
       setSuccess('Password updated successfully!');
       setNewPassword('');
       setConfirmPassword('');
@@ -83,6 +91,15 @@ export default function SettingsModal({ user, profile, onClose }: SettingsModalP
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleUpdatePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await performPasswordUpdate(false);
+  };
+
+  const handleUpdateAdminPassword = async () => {
+    await performPasswordUpdate(true);
   };
 
   const handleSubmitReview = async (e: React.FormEvent) => {
@@ -114,14 +131,15 @@ export default function SettingsModal({ user, profile, onClose }: SettingsModalP
     setError(null);
 
     try {
-      // 1. Delete Submissions
-      const q = query(collection(db, 'submissions'), where('userId', '==', user.uid));
-      const submissionDocs = await getDocs(q);
+      // 1. Delete Submissions - Robust check for both userId field and ID prefix
+      const [userSubDocs, idSubDocs] = await Promise.all([
+        getDocs(query(collection(db, 'submissions'), where('userId', '==', user.uid))),
+        getDocs(query(collection(db, 'submissions'), where(documentId(), '>=', user.uid + '_'), where(documentId(), '<', user.uid + '{')))
+      ]);
       
       const batch = writeBatch(db);
-      submissionDocs.forEach((doc) => {
-        batch.delete(doc.ref);
-      });
+      userSubDocs.forEach((doc) => batch.delete(doc.ref));
+      idSubDocs.forEach((doc) => batch.delete(doc.ref));
       
       // 2. Delete Profile
       batch.delete(doc(db, 'users', user.uid));
@@ -331,6 +349,16 @@ export default function SettingsModal({ user, profile, onClose }: SettingsModalP
                   >
                     {loading ? <Loader2 size={18} className="animate-spin" /> : 'ROTATE SECURITY KEY'}
                   </button>
+                  
+                  {profile?.role === 'admin' && (
+                    <button 
+                      type="button"
+                      onClick={handleUpdateAdminPassword}
+                      className="w-full bg-amber-50 text-amber-700 font-black text-xs uppercase tracking-widest py-6 rounded-3xl hover:bg-amber-100 transition-all"
+                    >
+                      CHANGE ADMIN PASSWORD
+                    </button>
+                  )}
                   
                   <p className="text-[9px] font-bold text-slate-400 uppercase text-center tracking-widest leading-relaxed px-10">
                     Warning: Major security rotations may terminate active sessions on other neural nodes. Re-authentication might be requested.

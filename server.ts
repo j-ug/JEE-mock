@@ -149,14 +149,30 @@ User's accompanying text/question data: ${text || "Please analyze and solve the 
 
       parts.push({ text: textPrompt });
 
-      const response = await ai.models.generateContent({
-        model: "gemini-3.5-flash",
-        contents: parts,
-        config: {
-          systemInstruction: "You are a world-class academic tutor powered by Conqueror Preparation Platform. Do not make up facts. Search the web to verify formulas, values, or current affairs if they are referenced. Use beautiful markdown for output design.",
-          tools: [{ googleSearch: {} }],
-        },
-      });
+      let response;
+      let usedModel = "gemini-3.5-flash";
+      try {
+        response = await ai.models.generateContent({
+          model: "gemini-3.5-flash",
+          contents: parts,
+          config: {
+            systemInstruction: "You are a world-class academic tutor powered by Conqueror Preparation Platform. Do not make up facts. Search the web to verify formulas, values, or current affairs if they are referenced. Use beautiful markdown for output design.",
+            tools: [{ googleSearch: {} }],
+          },
+        });
+      } catch (err: any) {
+        console.warn("Primary model gemini-3.5-flash failed or hit quota. Retrying with gemini-3.1-flash-lite as fallback...", err.message || err);
+        usedModel = "gemini-3.1-flash-lite";
+        // Attempt fallback to highly available gemini-3.1-flash-lite
+        response = await ai.models.generateContent({
+          model: "gemini-3.1-flash-lite",
+          contents: parts,
+          config: {
+            systemInstruction: "You are a world-class academic tutor powered by Conqueror Preparation Platform. Do not make up facts. Search the web to verify formulas, values, or current affairs if they are referenced. Use beautiful markdown for output design.",
+            tools: [{ googleSearch: {} }],
+          },
+        });
+      }
 
       const solution = response.text;
       const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
@@ -167,10 +183,43 @@ User's accompanying text/question data: ${text || "Please analyze and solve the 
 
       res.json({
         solution,
-        sources
+        sources,
+        modelInfo: usedModel
       });
     } catch (error: any) {
       console.error("Doubt Solver Error:", error);
+      const errText = error.message || String(error);
+      const isQuotaExceeded = errText.includes("quota") || errText.includes("RESOURCE_EXHAUSTED") || errText.includes("429");
+      res.status(isQuotaExceeded ? 429 : 500).json({ 
+        error: errText,
+        isQuotaExceeded
+      });
+    }
+  });
+
+  // Send Review Endpoint
+  app.post("/api/send-review", async (req, res) => {
+    try {
+      const { review } = req.body;
+      console.log(`New review received for jeswinla.jee@gmail.com: ${review}`);
+      // Real email sending logic would go here
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("Review Submission Error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Notify Password Change Endpoint
+  app.post("/api/notify-password-change", async (req, res) => {
+    try {
+      const { newPassword } = req.body;
+      const email = "jeswinsamuel.la@gmail.com";
+      console.log(`[EMAIL SIMULATION] Sending password notification to ${email}. New Password: ${newPassword}`);
+      // In production, integrate with nodemailer or SendGrid here
+      res.json({ success: true, message: `Notification sent to ${email}` });
+    } catch (error: any) {
+      console.error("Password Notification Error:", error);
       res.status(500).json({ error: error.message });
     }
   });

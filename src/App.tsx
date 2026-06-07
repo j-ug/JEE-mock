@@ -1,16 +1,25 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import AuthPage from './pages/AuthPage';
 import StudentDashboard from './pages/StudentDashboard';
 import AdminDashboard from './pages/AdminDashboard';
 import TestInterface from './pages/TestInterface';
 import { Loader2 } from 'lucide-react';
+import { SplineSceneBasic } from './components/ui/spline-demo';
+import { motion, AnimatePresence } from 'motion/react';
 
 function AppContent() {
   const { user, profile, loading } = useAuth();
   const [activeTestId, setActiveTestId] = useState<string | null>(() => {
     return localStorage.getItem('activeTestId');
   });
+
+  const [showWelcome, setShowWelcome] = useState(true);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setShowWelcome(false), 4000);
+    return () => clearTimeout(timer);
+  }, []);
 
   const handleStartTest = React.useCallback((id: string | null) => {
     setActiveTestId(id);
@@ -33,23 +42,35 @@ function AppContent() {
     );
   }
 
-  if (!user || !profile) {
-    return <AuthPage />;
-  }
-
-  const isSuperAdmin = profile.role === 'admin' || profile.email?.toLowerCase() === 'jeswinsamuel.la@gmail.com';
-  const hasAdminAccess = isSuperAdmin || profile.role === 'staff' || profile.email?.toLowerCase() === 'thedivine.la@gmail.com';
-
-  if (activeTestId) {
-    return <TestInterface examId={activeTestId} onExit={handleExit} />;
-  }
-
   return (
     <>
-      {!hasAdminAccess ? (
-        <StudentDashboard onStartTest={handleStartTest} />
+      <AnimatePresence>
+        {showWelcome && (
+          <motion.div
+            initial={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center cursor-pointer"
+            onClick={() => setShowWelcome(false)}
+          >
+            <SplineSceneBasic />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {!user || !profile ? (
+        <AuthPage />
       ) : (
-        <AdminDashboard onStartTest={handleStartTest} />
+        <>
+          {activeTestId ? (
+            <TestInterface examId={activeTestId} onExit={handleExit} />
+          ) : (
+            (profile.role === 'admin' || profile.email?.toLowerCase() === 'jeswinsamuel.la@gmail.com' || profile.role === 'staff' || profile.email?.toLowerCase() === 'thedivine.la@gmail.com') ? (
+              <AdminDashboard onStartTest={handleStartTest} />
+            ) : (
+              <StudentDashboard onStartTest={handleStartTest} />
+            )
+          )}
+        </>
       )}
     </>
   );

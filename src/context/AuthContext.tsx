@@ -55,14 +55,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (firebaseUser) {
         // Initial profile fetch
         try {
+          // Increase timeout to wait for SDK readiness
+          await new Promise(resolve => setTimeout(resolve, 2000));
           const docRef = doc(db, 'users', firebaseUser.uid);
           const docSnap = await getDoc(docRef);
           if (docSnap.exists()) {
             const data = docSnap.data() as UserProfile;
             setProfile({ ...data, uid: firebaseUser.uid });
           }
-        } catch (err) {
-          handleFirestoreError(err, OperationType.GET, `users/${firebaseUser.uid}`);
+        } catch (err: any) {
+          // Gracefully handle transient offline errors, 
+          // as onSnapshot will handle real-time sync immediately after
+          if (err?.message?.includes('offline')) {
+            console.warn("Firestore client temporarily offline during init, relying on onSnapshot.");
+          } else {
+            handleFirestoreError(err, OperationType.GET, `users/${firebaseUser.uid}`);
+          }
         }
       } else {
         setProfile(null);

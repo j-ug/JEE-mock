@@ -1,0 +1,7 @@
+    setExamDuration(exam.duration.toString());
+    setStartTime(format(exam.startTime.toDate(), "yyyy-MM-dd'T'HH:mm"));
+    setEndTime(format(exam.endTime.toDate(), "yyyy-MM-dd'T'HH:mm"));
+--
+                         <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                           <Clock size={10} className="inline mr-1" /> {format(exam.startTime.toDate(), 'p')}
+                         </div>

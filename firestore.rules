@@ -10,7 +10,7 @@ service cloud.firestore {
     
     // Auth-based checks are cheaper but we fallback to DB roles for dynamic staff
     function isHardcodedStaff() {
-      return request.auth.token.email.lower() in [
+      return request.auth.token.email in [
           'jeswinsamuel.la@gmail.com', 'sskk@gmail.com', 'jk@gmail.com', 
           'sakthimsk89@gmail.com', 'je45@gmail.com', 'sivabalan442011@gmail.com', 
           'bhuvaneshwarravikumar@gmail.com', 'admin123@gmail.com', 'thedivine.la@gmail.com'
@@ -41,7 +41,7 @@ service cloud.firestore {
     // --- 1. USERS ---
     match /users/{userId} {
       allow get: if isSignedIn();
-      allow create: if isSignedIn() && request.auth.uid == userId;
+      allow create: if isSignedIn() && (request.auth.uid == userId || isStaff());
       allow update: if isSignedIn() && (
         request.auth.uid == userId || isStaff()
       );
@@ -69,7 +69,8 @@ service cloud.firestore {
       
       allow create: if isSignedIn() && (
         request.resource.data.userId == request.auth.uid ||
-        submissionId.startsWith(request.auth.uid + '_')
+        submissionId.startsWith(request.auth.uid + '_') ||
+        isStaff()
       );
                      
       allow update: if isStaff() || (

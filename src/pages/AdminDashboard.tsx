@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { collection, query, orderBy, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, getDocs, where, deleteDoc, setDoc } from 'firebase/firestore';
+import { collection, query, orderBy, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, getDocs, where, deleteDoc, setDoc, increment, writeBatch } from 'firebase/firestore';
 import { db, createSecondaryAuth } from '../lib/firebase';
 import { handleFirestoreError, OperationType, removeUndefined } from '../lib/firestoreUtils';
 import { useAuth } from '../context/AuthContext';
@@ -13,6 +13,7 @@ import {
   LogOut, 
   Clock, 
   Calendar,
+  Copy,
   FileText,
   Loader2,
   Trash2,
@@ -39,15 +40,17 @@ import {
   Printer,
   Globe
 } from 'lucide-react';
+import { GlassButton } from '../components/ui/apple-tahoe-liquid-glass-button';
 import SettingsModal from '../components/SettingsModal';
+import { ReviewButton } from '../components/ReviewButton';
 import { auth } from '../lib/firebase';
+import { createUserWithEmailAndPassword, signOut, signInWithEmailAndPassword } from 'firebase/auth';
 import { format, addHours } from 'date-fns';
 import { cn } from '../lib/utils';
 import { compressImage } from '../lib/imageUtils';
 import { motion, AnimatePresence } from 'motion/react';
 import { authenticateGoogle, createSpreadsheet, populateSpreadsheet } from '../lib/googleSheets';
 import { downloadLocalDoc, createGoogleDocInDrive } from '../lib/googleDocs';
-import SurfWithAI from '../components/SurfWithAI';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell 
 } from 'recharts';
@@ -88,13 +91,18 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
   const [admins, setAdmins] = useState<UserProfile[]>([]);
   const [allUsers, setAllUsers] = useState<UserProfile[]>([]);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
-  const [activeTab, setActiveTab] = useState<'exams' | 'students' | 'admins' | 'stats' | 'monitor' | 'submissions' | 'surf'>('exams');
+  const [activeTab, setActiveTab] = useState<'exams' | 'students' | 'admins' | 'stats' | 'performance' | 'monitor' | 'submissions'>('exams');
   const [purgeInput, setPurgeInput] = useState('');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [reviewSubmission, setReviewSubmission] = useState<{exam: Exam, sub: Submission, student: UserProfile} | null>(null);
   const [reportSelectStudent, setReportSelectStudent] = useState<UserProfile | null>(null);
   const [showSectionMetrics, setShowSectionMetrics] = useState(false);
   const [docExportState, setDocExportState] = useState<{ exam: Exam, studentName?: string, studentEmail?: string } | null>(null);
+  const [exportState, setExportState] = useState<{ isLoading: boolean; url: string | null; error: string | null }>({
+    isLoading: false,
+    url: null,
+    error: null
+  });
   const [isCreatingDocs, setIsCreatingDocs] = useState(false);
   const [createdDocUrl, setCreatedDocUrl] = useState<string | null>(null);
   const [analyzingExam, setAnalyzingExam] = useState<Exam | null>(null);
@@ -111,6 +119,17 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
   const trashRef = useRef<HTMLDivElement>(null);
   const holdIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const deleteHoldIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const examDraftRef = useRef({
+    title: '',
+    duration: '180',
+    startTime: '',
+    endTime: '',
+    sections: {
+      Maths: { mcqs: [], numericals: [] },
+      Physics: { mcqs: [], numericals: [] },
+      Chemistry: { mcqs: [], numericals: [] }
+    }
+  });
 
   // Form State
   const [examTitle, setExamTitle] = useState('');
@@ -133,11 +152,8 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
   const [draggedOptionIdx, setDraggedOptionIdx] = useState<number | null>(null);
   const [draggedQId, setDraggedQId] = useState<string | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [exportState, setExportState] = useState<{ isLoading: boolean; url: string | null; error: string | null }>({
-    isLoading: false,
-    url: null,
-    error: null
-  });
+  const [searchTerm, setSearchTerm] = useState('');
+  const [preparationTypeExam, setPreparationTypeExam] = useState<'JEE' | 'NEET' | 'Both'>('JEE');
 
   const handleExportAssessment = async (exam: Exam, sub: Submission, student: UserProfile) => {
     setExportState({ isLoading: true, url: null, error: null });
@@ -333,9 +349,34 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
         if (data.error) throw new Error(data.error);
 
         setAnalysisResult(data.analysis);
-        setExamTitle(data.exam.title);
-        setExamDuration(data.exam.duration.toString());
-        setSectionsData(data.exam.sections);
+        setExamTitle(prev => prev || data.exam.title);
+        setExamDuration(prev => prev !== '180' ? prev : data.exam.duration.toString());
+        setSectionsData(prev => {
+          const newSections = { ...prev };
+          const incomingSections = data.exam.sections || {};
+          Object.keys(incomingSections).forEach(s => {
+             const lowerS = s.toLowerCase();
+             let sectionName: keyof typeof newSections | undefined;
+             
+             if (lowerS.includes('math')) sectionName = 'Maths';
+             else if (lowerS.includes('phys')) sectionName = 'Physics';
+             else if (lowerS.includes('chem')) sectionName = 'Chemistry';
+             else {
+               sectionName = (Object.keys(newSections) as (keyof typeof newSections)[]).find(
+                 key => (key as string).toLowerCase() === lowerS
+               );
+             }
+             if (sectionName) {
+               const existing = newSections[sectionName] || { mcqs: [], numericals: [] };
+               const incoming = incomingSections[s] || { mcqs: [], numericals: [] };
+               newSections[sectionName] = {
+                 mcqs: [...(existing.mcqs || []), ...(incoming.mcqs || [])],
+                 numericals: [...(existing.numericals || []), ...(incoming.numericals || [])]
+               };
+             }
+          });
+          return newSections;
+        });
         setAiMode('manual');
       } catch (err: any) {
         alert("Document Analysis Error: " + err.message);
@@ -346,10 +387,49 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
     reader.readAsDataURL(file);
   };
 
+  const cleanupAiBots = async () => {
+    try {
+      // Find bots
+      const q = query(collection(db, 'users'), where('displayName', '>=', 'ai bot 1'), where('displayName', '<=', 'ai bot 3\uf8ff'));
+      const snap = await getDocs(q);
+      
+      for (const docSnap of snap.docs) {
+        const botId = docSnap.id;
+        // Delete user
+        await deleteDoc(doc(db, 'users', botId));
+        
+        // Delete submissions
+        const subQ = query(collection(db, 'submissions'), where('userId', '==', botId));
+        const subSnap = await getDocs(subQ);
+        for (const subDoc of subSnap.docs) {
+          await deleteDoc(doc(db, 'submissions', subDoc.id));
+        }
+      }
+      alert('AI Bots and their data cleaned up!');
+    } catch (err: any) {
+      console.error(err);
+      alert('Cleanup Error: ' + err.message);
+    }
+  };
+
+  useEffect(() => {
+    if (isGlobalAdmin && loading === false && !localStorage.getItem('bots_cleaned')) {
+        cleanupAiBots();
+        localStorage.setItem('bots_cleaned', 'true');
+    }
+  }, [isGlobalAdmin, loading]);
+
+  const handleUpdatePreparationType = async (uid: string, type: 'JEE' | 'NEET') => {
+    try {
+      await updateDoc(doc(db, 'users', uid), { preparationType: type });
+      setStudents(prev => prev.map(s => s.uid === uid ? { ...s, preparationType: type } : s));
+      setAllUsers(prev => prev.map(s => s.uid === uid ? { ...s, preparationType: type } : s));
+    } catch (err: any) {
+      alert('Failed to update preparation type: ' + err.message);
+    }
+  };
+
   const handleCreateStudent = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newStudentEmail || !newStudentPassword || !newStudentName) return;
-    setIsCreatingStudent(true);
     try {
       const { createUserWithEmailAndPassword, updateProfile, signOut } = await import('firebase/auth');
       
@@ -488,8 +568,9 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
       }
     );
 
-    // REMOVED: real-time submissions sync to save quota
-    // const unsubSubs = onSnapshot(collection(db, 'submissions'), ...);
+    const unsubSubs = onSnapshot(collection(db, 'submissions'), (snap) => {
+      setSubmissions(snap.docs.map(d => ({ ...d.data(), id: d.id } as Submission)));
+    });
 
     // Fallback timer if snapshots are taking way too long
     const timeout = setTimeout(() => {
@@ -498,6 +579,7 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
 
     return () => {
       unsubExams();
+      unsubSubs();
       clearTimeout(timeout);
     };
   }, [user, profile, fetchUsers, fetchSubmissions]);
@@ -822,6 +904,7 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
         duration: parseInt(examDuration) || 180,
         sections: finalSections,
         answerKey,
+        preparationType: preparationTypeExam,
         updatedAt: serverTimestamp()
       };
 
@@ -888,6 +971,29 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
     setEditingExamId(null);
     setStartTime(format(new Date(), "yyyy-MM-dd'T'HH:mm"));
     setEndTime(format(addHours(new Date(), 24), "yyyy-MM-dd'T'HH:mm"));
+  };
+
+  const handleDuplicateExam = async (examToDuplicate: Exam) => {
+    try {
+      const creatorId = user?.uid || profile?.uid;
+      if (!creatorId) return alert('Authentication node not ready. Please refresh the page and try again.');
+      
+      const { id, ...examData } = examToDuplicate as any; 
+      
+      const duplicatedExam = {
+        ...examData,
+        title: `${examToDuplicate.title} (Copy)`,
+        createdAt: serverTimestamp(),
+        createdBy: creatorId,
+        submissionCount: 0
+      };
+
+      await addDoc(collection(db, 'exams'), duplicatedExam);
+      alert('Exam duplicated successfully!');
+    } catch (err) {
+      console.error(err);
+      alert('Error duplicating exam');
+    }
   };
 
   const handleEditExam = (exam: Exam) => {
@@ -1006,6 +1112,20 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
     }
   };
 
+  const handleUpdateInsight = async (userId: string, insight: string) => {
+    try {
+      await updateDoc(doc(db, 'users', userId), {
+        performanceInsight: insight,
+        updatedAt: serverTimestamp()
+      });
+      alert('Insight updated successfully');
+      fetchUsers();
+    } catch(err: any) {
+      console.error(err);
+      alert('Failed to update insight: ' + err.message);
+    }
+  };
+
   const handleDragUpdate = (event: any, info: any) => {
     if (!trashRef.current) return;
     const trashRect = trashRef.current.getBoundingClientRect();
@@ -1095,6 +1215,40 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
     }
   }, [deleteHoldProgress, deleteHoldExamId]);
 
+  useEffect(() => {
+    examDraftRef.current = {
+      title: examTitle,
+      duration: examDuration,
+      startTime,
+      endTime,
+      sections: sectionsData
+    };
+  }, [examTitle, examDuration, startTime, endTime, sectionsData]);
+
+  useEffect(() => {
+    if (!editingExamId) return;
+
+    const interval = setInterval(async () => {
+      const { title, duration, startTime, endTime, sections } = examDraftRef.current;
+      try {
+        const examData = {
+          title,
+          duration: parseInt(duration),
+          startTime: new Date(startTime),
+          endTime: new Date(endTime),
+          sections: sections,
+          updatedAt: serverTimestamp()
+        };
+        await updateDoc(doc(db, 'exams', editingExamId), removeUndefined(examData));
+        console.log(`[SYS] Auto-saved draft for exam: ${editingExamId}`);
+      } catch (err) {
+        console.error('[SYS] Auto-save failed', err);
+      }
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [editingExamId]);
+
+
   if (loading) return <div className="min-h-screen flex items-center justify-center bg-neutral-900"><Loader2 className="animate-spin text-white" /></div>;
 
   return (
@@ -1112,6 +1266,7 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
           <Menu size={24} />
         </button>
       </div>
+
 
       {/* Sidebar Overlay for Mobile */}
       <AnimatePresence>
@@ -1178,6 +1333,15 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
             <BarChart2 size={20} /> Performance Ranks
           </button>
           <button 
+            onClick={() => { setActiveTab('performance'); setMobileMenuOpen(false); }}
+            className={cn(
+              "w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all",
+              activeTab === 'performance' ? "bg-blue-600 text-white shadow-lg shadow-blue-600/30" : "text-slate-400 hover:bg-slate-800 hover:text-white"
+            )}
+          >
+            <TrendingUp size={20} /> Performance Insight
+          </button>
+          <button 
             onClick={() => { setActiveTab('submissions'); setMobileMenuOpen(false); }}
             className={cn(
               "w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all",
@@ -1194,15 +1358,6 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
             )}
           >
             <Activity size={20} /> Live Monitor
-          </button>
-          <button 
-            onClick={() => { setActiveTab('surf'); setMobileMenuOpen(false); }}
-            className={cn(
-              "w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all",
-              activeTab === 'surf' ? "bg-blue-600 text-white shadow-lg shadow-blue-600/30" : "text-slate-400 hover:bg-slate-800 hover:text-white"
-            )}
-          >
-            <Globe size={20} /> Surf with AI
           </button>
         </nav>
 
@@ -1241,10 +1396,9 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
               {activeTab === 'stats' && 'Global Analytics'}
               {activeTab === 'monitor' && 'Candidate Surveillance'}
               {activeTab === 'submissions' && 'Global History'}
-              {activeTab === 'surf' && 'Surf with AI'}
             </h2>
             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-              {activeTab === 'surf' ? 'Google Lens Doubt Solver Channel' : 'Standard Marking +4/-1 Active'}
+              Standard Marking +4/-1 Active
             </p>
           </div>
           <div className="flex items-center gap-4">
@@ -1258,7 +1412,7 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
                 </button>
              )}
              <div className="bg-slate-100 px-4 py-2 rounded-lg text-xs font-bold text-slate-500 uppercase tracking-widest">
-               teacher@987 verified
+               verified✔️
              </div>
           </div>
         </header>
@@ -1287,68 +1441,26 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
                     <p className="text-slate-500 text-sm font-medium italic">Click boxes to edit answer keys or student stats.</p>
                   </div>
                   <div className="flex flex-wrap gap-4 w-full lg:w-auto">
-                    <button 
-                      onClick={() => { fetchUsers(); fetchSubmissions(); }}
-                      className="bg-slate-100 hover:bg-slate-200 text-slate-600 px-6 py-4 rounded-xl font-black flex items-center gap-2 transition-all shadow-sm"
-                    >
-                      <Activity size={18} /> SYNC DATABASE
-                    </button>
-                    {isGlobalAdmin && (
-                      <button 
-                        onClick={runAutoPurge}
-                        className="bg-purple-50 text-purple-600 px-6 py-4 rounded-xl font-black border border-purple-100 flex items-center gap-2 hover:bg-purple-600 hover:text-white transition-all shadow-lg shadow-purple-500/10"
-                      >
-                         <BrainCircuit size={18} /> HYGIENE CHECK
-                      </button>
-                    )}
-                    {isSuperAdmin && (
-                      <button 
-                         onClick={async () => {
-                           if (confirm(`CRITICAL: This will purge ALL ${submissions.length} results AND run orphan cleanup. Continue?`)) {
-                             try {
-                               // 1. Wipe all current submissions
-                               const subPromises = submissions.map(s => deleteDoc(doc(db, 'submissions', s.id)).catch(e => console.error(e)));
-                               
-                               // 2. Clear role-less users
-                               const ghosts = allUsers.filter(u => !u.role);
-                               const ghostPromises = ghosts.map(u => deleteDoc(doc(db, 'users', u.uid)).catch(e => console.error(e)));
-                               
-                               await Promise.all([...subPromises, ...ghostPromises]);
-                               alert('SYSTEM_MAINTENANCE_COMPLETE: All submission data and ghost profiles have been purged.');
-                               fetchSubmissions();
-                               fetchUsers();
-                             } catch (err) {
-                               console.error("Purge failure", err);
-                               alert("Action failed: Some resources could not be purged. Check permissions.");
-                             }
-                           }
-                         }}
-                        className="bg-red-50 text-red-600 px-6 py-4 rounded-xl font-black border border-red-100 flex items-center gap-2 hover:bg-red-600 hover:text-white transition-all shadow-lg shadow-red-500/10 order-1"
-                      >
-                         <Trash2 size={18} /> GLOBAL SYSTEM PURGE
-                      </button>
-                    )}
-                    {canModifyExams && (
-                      <button 
-                        onClick={() => setShowCreateModal(true)}
-                        className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-4 rounded-xl font-black shadow-xl shadow-blue-500/30 flex items-center gap-3 transition-transform hover:-translate-y-1 order-2"
-                      >
+                     <button 
+                         onClick={() => setShowCreateModal(true)}
+
+                         className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-4 rounded-xl font-black shadow-xl shadow-blue-500/30 flex items-center gap-3 transition-transform hover:-translate-y-1 order-2"
+                       >
                         <Plus size={20} strokeWidth={3} /> CREATE NEW EXAM
                       </button>
-                    )}
                   </div>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-                  {exams.map(exam => (
+                  {exams.map(e => (
                     <motion.div 
-                      key={exam.id}
+                      key={e.id}
                       layout
                       drag
                       dragSnapToOrigin
                       onDragStart={() => setIsDraggingAny(true)}
                       onDrag={handleDragUpdate}
-                      onDragEnd={(e, info) => handleDragEnd(e, info, exam.id)}
+                      onDragEnd={(event, info) => handleDragEnd(event, info, e.id)}
                       whileDrag={{ scale: 1.05, zIndex: 100, rotate: 2 }}
                       className="bg-white p-7 rounded-2xl border border-slate-200 shadow-sm hover:border-blue-400 transition-all group cursor-grab active:cursor-grabbing"
                     >
@@ -1356,10 +1468,10 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
                         <div className="flex gap-2">
                            {canModifyExams && (
                              <button 
-                               onPointerDown={(e) => e.stopPropagation()}
-                               onClick={(e) => {
-                                 e.stopPropagation();
-                                 setExamToDelete(exam);
+                               onPointerDown={(event) => event.stopPropagation()}
+                               onClick={(event) => {
+                                 event.stopPropagation();
+                                 setExamToDelete(e);
                                 }}
                                 className="p-2 bg-red-50 text-red-400 hover:text-white hover:bg-red-600 rounded-lg transition-all z-10"
                                 title="Purge Exam"
@@ -1369,10 +1481,10 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
                             )}
                             {canModifyExams && (
                               <button 
-                                onPointerDown={(e) => e.stopPropagation()}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleEditExam(exam);
+                                onPointerDown={(event) => event.stopPropagation()}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  handleEditExam(e);
                                 }}
                                 className="p-2 bg-slate-100 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all z-10"
                                 title="Edit Exam"
@@ -1381,11 +1493,11 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
                               </button>
                             )}
                             <button 
-                              onPointerDown={(e) => e.stopPropagation()}
-                              onClick={(e) => {
-                                e.stopPropagation();
+                              onPointerDown={(event) => event.stopPropagation()}
+                              onClick={(event) => {
+                                event.stopPropagation();
                                 setDocExportState({
-                                  exam: exam
+                                  exam: e
                                 });
                                 setCreatedDocUrl(null);
                               }}
@@ -1394,32 +1506,45 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
                             >
                               <Printer size={14} />
                             </button>
+                            <button 
+                              onPointerDown={(event) => event.stopPropagation()}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                handleDuplicateExam(e);
+                              }}
+                              className="p-2 bg-yellow-50 text-yellow-500 hover:text-white hover:bg-yellow-600 rounded-lg transition-all z-10"
+                              title="Duplicate Exam"
+                            >
+                              <Copy size={14} />
+                            </button>
                         </div>
                         <span className="px-2.5 py-1 bg-green-100 text-green-700 text-[10px] font-black rounded uppercase tracking-wider">
-                          {submissions.filter(s => s.examId === exam.id).length > 0 ? 'Live' : 'Scheduled'}
+                          {submissions.filter(s => s.examId === e.id).length > 0 ? 'Live' : 'Scheduled'}
                         </span>
                       </div>
                       
-                      <h3 className="text-xl font-black text-slate-900 mb-2 uppercase tracking-tight">{exam.title}</h3>
+                      <h3 className="text-xl font-black text-slate-900 mb-2 uppercase tracking-tight">{e.title}</h3>
                       <p className="text-xs text-slate-500 mb-6 leading-relaxed">
-                        75 Questions (20+5 Pattern) | {exam.duration / 60}h | Fullscreen Secure Mode.
+                        75 Questions (20+5 Pattern) | {e.duration / 60}h | Fullscreen Secure Mode.
                       </p>
 
                       <div className="grid grid-cols-2 gap-3 mb-6">
                          <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
-                           <Calendar size={10} className="inline mr-1" /> {format(exam.startTime.toDate(), 'dd MMM')}
+                           <Calendar size={10} className="inline mr-1" /> {format(e.startTime.toDate(), 'dd MMM')}
                          </div>
                          <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
-                           <Clock size={10} className="inline mr-1" /> {format(exam.startTime.toDate(), 'p')}
+                           <Clock size={10} className="inline mr-1" /> {format(e.startTime.toDate(), 'p')}
                          </div>
                       </div>
 
                       <div className="mt-auto pt-6 border-t border-slate-100 flex flex-col gap-4">
                         <div className="flex justify-between text-[11px] font-black uppercase tracking-widest">
-                          <span className="text-blue-600">{submissions.filter(s => s.examId === exam.id).length} Submissions</span>
-                          <span className="text-slate-400">Top Score: {
-                            Math.max(...submissions.filter(s => s.examId === exam.id).map(s => {
-                              const { score } = calculateSubmissionScore(exam, s);
+                          <span className="text-blue-600 bg-blue-50 px-3 py-1 rounded-full text-[10px]">
+                              {new Set(submissions.filter(s => s.examId === e.id && !s.hidden && allUsers.some(u => u.uid === s.userId)).map(s => s.userId)).size} Students
+                            </span>
+                          <span className="text-slate-400 bg-amber-50 px-3 py-1 rounded-full text-[10px] text-amber-700">Top Score: {
+                            Math.max(...submissions.filter(s => s.examId === e.id && !s.hidden && allUsers.some(u => u.uid === s.userId)).map(s => {
+                              const { score } = calculateSubmissionScore(e, s);
                               return score;
                             }), 0)
                           }</span>
@@ -1427,20 +1552,20 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
                         <div className="flex gap-2 w-full">
                           {(profile?.role === 'student' || isSuperAdmin || profile?.email?.toLowerCase() === 'thedivine.la@gmail.com') && (
                             <button 
-                              onClick={() => onStartTest(exam.id)}
+                              onClick={() => onStartTest(e.id)}
                               className="flex-1 py-3 bg-green-600 text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-green-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-green-500/20"
                             >
                                <FileText size={12} /> Take Sample
                             </button>
                           )}
                           <button 
-                            onClick={() => { setExamFilter(exam.id); setActiveTab('submissions'); }}
+                            onClick={() => { setExamFilter(e.id); setActiveTab('submissions'); }}
                             className="flex-1 py-3 bg-slate-900 text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-800 transition-all flex items-center justify-center gap-2"
                           >
                              <Eye size={12} /> Results
                           </button>
                           <button 
-                            onClick={() => setAnalyzingExam(exam)}
+                            onClick={() => setAnalyzingExam(e)}
                             className="flex-1 py-3 bg-blue-600 text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-blue-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-blue-500/20"
                           >
                              <BarChart2 size={12} /> Analytics
@@ -1466,28 +1591,40 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -20 }}
               >
-                <div className="flex flex-col lg:flex-row justify-between items-start lg:items-end gap-6 mb-12">
-                  <div>
-                    <h2 className="text-2xl md:text-4xl font-black text-slate-900 mb-2">Student Base</h2>
-                    <p className="text-slate-500 text-sm font-medium italic">Manage individual account performance and session status. (Snapshot disabled to save quota)</p>
+                  <div className="flex flex-col lg:flex-row justify-between items-start lg:items-end gap-6 mb-12">
+                    <div>
+                      <h2 className="text-2xl md:text-4xl font-black text-slate-900 mb-2">Student Base</h2>
+                      <p className="text-slate-500 text-sm font-medium italic">Manage individual account performance and session status. (Snapshot disabled to save quota)</p>
+                    </div>
+                    <div className="flex flex-col items-end gap-4 w-full lg:w-auto">
+                      <div className="relative w-full lg:w-64">
+                         <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400" size={18} />
+                         <input 
+                           type="text" 
+                           placeholder="Search students..." 
+                           value={searchTerm}
+                           onChange={(e) => setSearchTerm(e.target.value)}
+                           className="w-full pl-10 pr-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-bold"
+                         />
+                      </div>
+                      <div className="flex flex-wrap gap-4 w-full lg:w-auto">
+                        <button 
+                          onClick={() => fetchUsers()}
+                          className="bg-slate-100 hover:bg-slate-200 text-slate-600 px-6 py-4 rounded-xl font-black flex items-center gap-2 transition-all"
+                        >
+                          <Activity size={18} /> REFRESH
+                        </button>
+                        {isSuperAdmin && (
+                          <button 
+                            onClick={() => setShowCreateStudentModal(true)}
+                            className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-4 rounded-xl font-black shadow-xl shadow-blue-500/30 flex items-center gap-3 transition-transform hover:-translate-y-1"
+                          >
+                            <Plus size={20} strokeWidth={3} /> CREATE STUDENT
+                          </button>
+                        )}
+                      </div>
+                    </div>
                   </div>
-                  <div className="flex flex-wrap gap-4 w-full lg:w-auto">
-                    <button 
-                      onClick={() => fetchUsers()}
-                      className="bg-slate-100 hover:bg-slate-200 text-slate-600 px-6 py-4 rounded-xl font-black flex items-center gap-2 transition-all"
-                    >
-                      <Activity size={18} /> REFRESH LIST
-                    </button>
-                    {isSuperAdmin && (
-                      <button 
-                        onClick={() => setShowCreateStudentModal(true)}
-                        className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-4 rounded-xl font-black shadow-xl shadow-blue-500/30 flex items-center gap-3 transition-transform hover:-translate-y-1"
-                      >
-                        <Plus size={20} strokeWidth={3} /> CREATE STUDENT
-                      </button>
-                    )}
-                  </div>
-                </div>
 
                 <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm">
                   <table className="w-full text-left">
@@ -1499,11 +1636,17 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
                         <th className="px-8 py-5 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">Root Secret</th>
                         <th className="px-8 py-5 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">Submissions</th>
                         <th className="px-8 py-5 text-[10px] font-black text-slate-400 uppercase tracking-widest">Activity</th>
+                        <th className="px-8 py-5 text-[10px] font-black text-slate-400 uppercase tracking-widest">Preparation</th>
                         <th className="px-8 py-5 text-[10px] font-black text-slate-400 uppercase tracking-widest">Sync</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {students.map(student => (
+                      {students
+                        .filter(student => 
+                           student.displayName?.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                           student.email?.toLowerCase().includes(searchTerm.toLowerCase())
+                        )
+                        .map(student => (
                         <tr key={student.uid} className="border-b border-slate-100 hover:bg-slate-50/50 transition-colors">
                           <td className="px-8 py-5">
                             <div className="flex gap-2">
@@ -1555,9 +1698,21 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
                           </td>
                           <td className="px-8 py-5">
                              <div className="flex flex-col">
-                               <span className="font-black text-slate-700">{submissions.filter(s => s.userId === student.uid && s.status === 'completed').length} Tests</span>
+                              <span className={cn("font-black", submissions.filter(s => s.userId === student.uid && s.status === 'completed').length === 0 ? "text-slate-400" : "text-slate-700")}>
+                             {(submissions.filter(s => s.userId === student.uid && s.status === 'completed').length)} Submissions
+                              </span>
                                <span className="text-[10px] text-slate-400 italic">Last attempt {submissions.filter(s => s.userId === student.uid && s.status === 'completed').length > 0 ? 'Recently' : 'Never'}</span>
                              </div>
+                          </td>
+                          <td className="px-8 py-5">
+                             <select 
+                               value={student.preparationType || 'JEE'}
+                               onChange={(e) => handleUpdatePreparationType(student.uid, e.target.value as 'JEE' | 'NEET')}
+                               className="bg-slate-100 text-slate-700 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider outline-none"
+                             >
+                                 <option value="JEE">JEE</option>
+                                 <option value="NEET">NEET</option>
+                             </select>
                           </td>
                           <td className="px-8 py-5">
                             <span className="px-3 py-1 bg-blue-50 text-blue-700 rounded-full text-[10px] font-black uppercase tracking-wider">Online</span>
@@ -1634,6 +1789,60 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
               </motion.div>
             )}
 
+            {activeTab === 'performance' && (
+              <motion.div 
+                key="performance"
+                initial={{ opacity: 0, scale: 0.98 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.98 }}
+                className="space-y-6"
+              >
+                <div className="flex justify-between items-end mb-4">
+                  <div>
+                    <h2 className="text-[10px] font-black text-blue-600 uppercase tracking-[0.4em] mb-2">Neural Insight Engine</h2>
+                    <h1 className="text-4xl font-black italic tracking-tighter uppercase leading-none">Performance Insights Editor</h1>
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-[32px] border border-slate-200 shadow-sm overflow-hidden">
+                  <table className="w-full">
+                    <thead className="bg-slate-50 border-b border-slate-100">
+                      <tr>
+                        <th className="px-6 py-4 text-xs font-black text-slate-400 uppercase tracking-widest text-left">Student</th>
+                        <th className="px-6 py-4 text-xs font-black text-slate-400 uppercase tracking-widest">Insight/Feedback</th>
+                        <th className="px-6 py-4 text-xs font-black text-slate-400 uppercase tracking-widest text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {students.map(student => (
+                        <tr key={student.uid}>
+                          <td className="px-6 py-4 font-bold text-slate-800">{student.displayName}</td>
+                          <td className="px-6 py-4">
+                            <input 
+                              type="text"
+                              data-uid={student.uid}
+                              defaultValue={student.performanceInsight || ''}
+                              className="w-full bg-slate-50 border border-slate-200 px-4 py-2 rounded-lg"
+                              placeholder="Add insight..."
+                            />
+                          </td>
+                          <td className="px-6 py-4 text-right">
+                            <button 
+                               onClick={() => {
+                                 const input = document.querySelector(`input[data-uid="${student.uid}"]`) as HTMLInputElement;
+                                 handleUpdateInsight(student.uid, input?.value || '');
+                               }}
+                               className="px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold"
+                            >Save</button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </motion.div>
+            )}
+
             {activeTab === 'monitor' && (
             <div className="space-y-8">
               <div className="flex justify-between items-end mb-4">
@@ -1652,10 +1861,6 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                 {students
                   .sort((a, b) => {
-                    const aOnline = a.lastSeen && (Date.now() - getLastSeenMillis(a.lastSeen) < 60000);
-                    const bOnline = b.lastSeen && (Date.now() - getLastSeenMillis(b.lastSeen) < 60000);
-                    if (aOnline && !bOnline) return -1;
-                    if (!aOnline && bOnline) return 1;
                     return (getLastSeenMillis(b.lastSeen) || 0) - (getLastSeenMillis(a.lastSeen) || 0);
                   })
                   .map((student) => {
@@ -1849,6 +2054,9 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
                                             hidden: !sub.hidden,
                                             updatedAt: serverTimestamp()
                                           }));
+                                          await updateDoc(doc(db, 'exams', sub.examId), {
+                                            submissionCount: increment(sub.hidden ? 1 : -1)
+                                          });
                                           fetchSubmissions();
                                         } catch (err) {
                                           console.error("Toggle hide failed", err);
@@ -1904,7 +2112,7 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
                       <Trophy className="text-blue-400" size={20} />
                       <div className="text-left">
                         <p className="text-[8px] font-black text-slate-500 uppercase tracking-widest leading-none mb-1">Total Submissions</p>
-                        <p className="text-xl font-black tracking-tight leading-none">{submissions.filter(s => s.status === 'completed').length}</p>
+                        <p className="text-xl font-black tracking-tight leading-none">0</p>
                       </div>
                     </div>
                   </div>
@@ -2020,8 +2228,7 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -20 }}
                 className="p-6 md:p-12"
-              >
-                <SurfWithAI />
+              >                
               </motion.div>
             )}
           </AnimatePresence>
@@ -2200,7 +2407,7 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
                     onClick={() => setAiMode('document')}
                     className={cn("px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all", aiMode === 'document' ? "bg-white text-purple-600 shadow-sm" : "text-slate-500 hover:text-slate-800")}
                   >
-                    Analysis
+                    AI Document Assistant
                   </button>
                 </div>
                 {editingExamId && (
@@ -2296,14 +2503,16 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
                       />
                     </div>
                   </div>
-                  <button 
+                  <GlassButton 
                     onClick={handeAiGenerate}
                     disabled={aiIsGenerating}
-                    className="w-full bg-blue-600 text-white py-4 rounded-2xl font-black text-sm uppercase tracking-widest shadow-lg shadow-blue-500/20 hover:bg-blue-700 transition-all flex items-center justify-center gap-3"
+                    className="w-full"
+                    glassColor={aiIsGenerating ? "oklch(from var(--blue-600) l c h / 10%)" : undefined}
+                    contentClassName="flex items-center justify-center gap-3 w-full"
                   >
                     {aiIsGenerating ? <Loader2 className="animate-spin" /> : <BrainCircuit size={18} />}
                     {aiIsGenerating ? "Neural Link Active..." : "Synthesize Exam Pattern"}
-                  </button>
+                  </GlassButton>
                 </div>
               )}
 
@@ -2317,7 +2526,7 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
                     <input 
                       type="file"
                       onChange={handleFileUpload}
-                      accept=".pdf,.doc,.docx,image/*"
+                      accept=".pdf,.png,.jpg,.jpeg,.ppt,.pptx,.doc,.docx"
                       className="absolute inset-0 opacity-0 cursor-pointer"
                     />
                     <div className="space-y-4">
@@ -2342,8 +2551,38 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
                         <AlertCircle size={12} /> Diagnostic Summary
                       </h5>
                       <p className="text-xs italic text-slate-600 font-medium leading-relaxed">{analysisResult.summary}</p>
-                      {analysisResult.errors.length > 0 && (
-                        <div className="space-y-2">
+                      
+                      {analysisResult.questions && analysisResult.questions.length > 0 && (
+                        <div className="mt-6 pt-6 border-t border-slate-100">
+                          <h6 className="text-[10px] font-black text-slate-900 uppercase tracking-widest mb-4 flex items-center justify-between">
+                            Question Paper Preview
+                            <button 
+                              onClick={() => {
+                                const text = analysisResult.questions.map((q: any, i: number) => `Q${i+1}: ${q.text}\nAnswer: ${q.answer}\nExplanation: ${q.explanation}`).join('\n\n');
+                                navigator.clipboard.writeText(text);
+                                alert("Copied to clipboard!");
+                              }}
+                              className="text-purple-600 hover:text-purple-700 font-bold text-[8px] uppercase"
+                            >
+                              Copy All
+                            </button>
+                          </h6>
+                          <div className="space-y-4">
+                            {analysisResult.questions.map((q: any, i: number) => (
+                              <div key={i} className="p-4 bg-slate-50 rounded-xl border border-slate-100 space-y-2">
+                                <p className="text-xs font-bold text-slate-900">{i+1}. {q.text}</p>
+                                <div className="text-[10px] text-slate-600 space-y-1">
+                                  <p><span className="font-black uppercase">Answer:</span> {q.answer}</p>
+                                  <p><span className="font-black uppercase">Explanation:</span> {q.explanation}</p>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {analysisResult.errors?.length > 0 && (
+                        <div className="space-y-2 pt-4 border-t border-slate-100">
                           <label className="text-[8px] font-black text-red-500 uppercase tracking-widest">Errors Detected:</label>
                           {analysisResult.errors.map((err: string, i: number) => (
                             <div key={i} className="bg-red-50 p-3 rounded-lg border border-red-100 flex items-center gap-2">
@@ -2361,6 +2600,24 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
               {/* Basic Info */}
               <div className="grid grid-cols-2 gap-6 relative">
                  <div className="col-span-2">
+                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3">Preparation Type</label>
+                  <div className="flex gap-2">
+                    {(['JEE', 'NEET', 'Both'] as const).map(p => (
+                      <button
+                        key={p}
+                        onClick={() => setPreparationTypeExam(p)}
+                        className={cn(
+                          "px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all",
+                          preparationTypeExam === p ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-400 hover:bg-slate-200"
+                        )}
+                      >
+                        {p}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="col-span-2">
                   <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3">Mock Exam Title</label>
                   <input 
                     value={examTitle}
@@ -2430,7 +2687,7 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
                     </div>
 
                     <div className="space-y-6">
-                      {([...sectionsData[activeCreationSection].mcqs, ...sectionsData[activeCreationSection].numericals]).map((q, idx) => (
+                      {([...(sectionsData?.[activeCreationSection]?.mcqs || []), ...(sectionsData?.[activeCreationSection]?.numericals || [])]).map((q, idx) => (
                         <div key={q.id} className="grid grid-cols-[1fr,300px] gap-6 group">
                           <div className="p-6 bg-slate-50 rounded-3xl border border-slate-200 space-y-4 relative hover:border-blue-300 transition-all">
                             <button type="button" onClick={() => removeQuestion(q.id)} className="absolute top-4 right-4 text-slate-300 hover:text-red-500 transition-colors"><Trash2 size={16} /></button>
@@ -2585,7 +2842,7 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
                       ))}
                     </div>
 
-                    {sectionsData[activeCreationSection].mcqs.length === 0 && sectionsData[activeCreationSection].numericals.length === 0 && (
+                    {((sectionsData?.[activeCreationSection]?.mcqs?.length || 0) === 0 && (sectionsData?.[activeCreationSection]?.numericals?.length || 0) === 0) && (
                       <div className="py-20 text-center border-2 border-dashed border-slate-200 rounded-[32px] bg-slate-50/50">
                          <div className="w-16 h-16 bg-white rounded-2xl flex items-center justify-center text-slate-200 mx-auto mb-4 border border-slate-100">
                             <Plus size={32} />
@@ -2783,7 +3040,7 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
                 <h1 className="text-5xl font-black italic tracking-tighter uppercase mb-4 leading-none">
                   {analyzingExam.title}
                 </h1>
-                <p className="text-slate-400 font-bold uppercase tracking-widest text-xs">Total Submissions: {submissions.filter(s => s.examId === analyzingExam.id && s.status === 'completed').length}</p>
+                <p className="text-slate-400 font-bold uppercase tracking-widest text-xs">Total Submissions: 0</p>
               </div>
 
               <div className="flex-1 overflow-y-auto pr-6 custom-scrollbar space-y-12">
@@ -3582,6 +3839,7 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
         )}
       </AnimatePresence>
 
+      <ReviewButton />
     </div>
   );
 }
