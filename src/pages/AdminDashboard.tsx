@@ -142,6 +142,8 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
   const [newStudentEmail, setNewStudentEmail] = useState('');
   const [newStudentPassword, setNewStudentPassword] = useState('');
   const [newStudentName, setNewStudentName] = useState('');
+  const [newStudentPrepType, setNewStudentPrepType] = useState<'JEE' | 'NEET' | 'Both'>('JEE');
+  const [newStudentRole, setNewStudentRole] = useState<'student' | 'admin'>('student');
   const [isCreatingStudent, setIsCreatingStudent] = useState(false);
   
   const [userToDelete, setUserToDelete] = useState<UserProfile | null>(null);
@@ -419,7 +421,7 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
     }
   }, [isGlobalAdmin, loading]);
 
-  const handleUpdatePreparationType = async (uid: string, type: 'JEE' | 'NEET') => {
+  const handleUpdatePreparationType = async (uid: string, type: 'JEE' | 'NEET' | 'Both') => {
     try {
       await updateDoc(doc(db, 'users', uid), { preparationType: type });
       setStudents(prev => prev.map(s => s.uid === uid ? { ...s, preparationType: type } : s));
@@ -441,7 +443,8 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
         uid: userCredential.user.uid,
         displayName: newStudentName,
         email: newStudentEmail,
-        role: 'student',
+        role: newStudentRole,
+        preparationType: newStudentPrepType,
         password: newStudentPassword,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
@@ -453,8 +456,10 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
       setNewStudentEmail('');
       setNewStudentPassword('');
       setNewStudentName('');
+      setNewStudentPrepType('JEE');
+      setNewStudentRole('student');
       setShowCreateStudentModal(false);
-      alert('Student account created successfully! They can now login with these credentials.');
+      alert(`${newStudentRole === 'admin' ? 'Admin' : 'Student'} account created successfully! They can now login with these credentials.`);
     } catch (err: any) {
       console.error(err);
       if (err.code === 'auth/email-already-in-use') {
@@ -1619,7 +1624,7 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
                             onClick={() => setShowCreateStudentModal(true)}
                             className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-4 rounded-xl font-black shadow-xl shadow-blue-500/30 flex items-center gap-3 transition-transform hover:-translate-y-1"
                           >
-                            <Plus size={20} strokeWidth={3} /> CREATE STUDENT
+                            <Plus size={20} strokeWidth={3} /> CREATE USER
                           </button>
                         )}
                       </div>
@@ -1707,11 +1712,12 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
                           <td className="px-8 py-5">
                              <select 
                                value={student.preparationType || 'JEE'}
-                               onChange={(e) => handleUpdatePreparationType(student.uid, e.target.value as 'JEE' | 'NEET')}
+                               onChange={(e) => handleUpdatePreparationType(student.uid, e.target.value as 'JEE' | 'NEET' | 'Both')}
                                className="bg-slate-100 text-slate-700 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider outline-none"
                              >
                                  <option value="JEE">JEE</option>
                                  <option value="NEET">NEET</option>
+                                 <option value="Both">Both</option>
                              </select>
                           </td>
                           <td className="px-8 py-5">
@@ -1732,9 +1738,17 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -20 }}
               >
-                <div className="mb-12">
-                  <h2 className="text-4xl font-black text-slate-900 mb-2">Admin Directory</h2>
-                  <p className="text-slate-500 font-medium italic">Manage staff accounts and system permissions.</p>
+                <div className="mb-12 flex justify-between items-end">
+                  <div>
+                    <h2 className="text-4xl font-black text-slate-900 mb-2">Admin Directory</h2>
+                    <p className="text-slate-500 font-medium italic">Manage staff accounts and system permissions.</p>
+                  </div>
+                  <button 
+                    onClick={() => {setNewStudentRole('admin'); setShowCreateStudentModal(true);}}
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-4 rounded-xl font-black shadow-xl shadow-blue-500/30 flex items-center gap-3 transition-transform hover:-translate-y-1"
+                  >
+                    <Plus size={20} strokeWidth={3} /> CREATE ADMIN
+                  </button>
                 </div>
 
                 <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm">
@@ -2895,6 +2909,20 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
                     className="w-full px-5 py-4 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all font-bold"
                     placeholder="e.g. Satish Kumar"
                   />
+                </div>
+
+               
+                <div>
+                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Role & Preparation</label>
+                  <div className="flex gap-4 mb-3">
+                     <button type="button" onClick={() => setNewStudentRole('student')} className={cn("px-4 py-2 rounded-xl text-[10px] font-bold uppercase", newStudentRole === 'student' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-500')}>Student</button>
+                     <button type="button" onClick={() => setNewStudentRole('admin')} className={cn("px-4 py-2 rounded-xl text-[10px] font-bold uppercase", newStudentRole === 'admin' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-500')}>Admin</button>
+                  </div>
+                  <div className="flex gap-2">
+                    {(['JEE', 'NEET', 'Both'] as const).map(p => (
+                      <button key={p} type="button" onClick={() => setNewStudentPrepType(p)} className={cn("px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all", newStudentPrepType === p ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-400 hover:bg-slate-200")}>{p}</button>
+                    ))}
+                  </div>
                 </div>
 
                 <div>
