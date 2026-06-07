@@ -91,7 +91,7 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
   const [admins, setAdmins] = useState<UserProfile[]>([]);
   const [allUsers, setAllUsers] = useState<UserProfile[]>([]);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
-  const [activeTab, setActiveTab] = useState<'exams' | 'students' | 'admins' | 'stats' | 'performance' | 'monitor' | 'submissions'>('exams');
+  const [activeTab, setActiveTab] = useState<'exams' | 'students' | 'admins' | 'stats' | 'performance' | 'monitor' | 'submissions' | 'reviews'>('exams');
   const [purgeInput, setPurgeInput] = useState('');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [reviewSubmission, setReviewSubmission] = useState<{exam: Exam, sub: Submission, student: UserProfile} | null>(null);
@@ -121,7 +121,7 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
   const deleteHoldIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const examDraftRef = useRef({
     title: '',
-    duration: '180.00',
+    duration: '180',
     startTime: '',
     endTime: '',
     sections: {
@@ -1356,6 +1356,15 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
             <History size={20} /> Global History
           </button>
           <button 
+            onClick={() => { setActiveTab('reviews'); setMobileMenuOpen(false); }}
+            className={cn(
+              "w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all",
+              activeTab === 'reviews' ? "bg-blue-600 text-white shadow-lg shadow-blue-600/30" : "text-slate-400 hover:bg-slate-800 hover:text-white"
+            )}
+          >
+            <Eye size={20} /> Reviews & Audits
+          </button>
+          <button 
             onClick={() => { setActiveTab('monitor'); setMobileMenuOpen(false); }}
             className={cn(
               "w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all",
@@ -1799,6 +1808,23 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
                       ))}
                     </tbody>
                   </table>
+                </div>
+              </motion.div>
+            )}
+
+            {activeTab === 'reviews' && (
+              <motion.div 
+                key="reviews"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }}
+              >
+                <div className="mb-12">
+                  <h2 className="text-4xl font-black text-slate-900 mb-2">Experiences & Reviews</h2>
+                  <p className="text-slate-500 font-medium italic">Overview of system feedback and functional audit logs.</p>
+                </div>
+                <div className="bg-white rounded-3xl border border-slate-200 p-8 text-center text-slate-500">
+                   No reviews or audit logs available at this time.
                 </div>
               </motion.div>
             )}
