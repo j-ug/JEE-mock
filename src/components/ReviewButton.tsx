@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { MessageSquare, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { auth } from '../lib/firebase';
 
 export const ReviewButton = () => {
   const [isOpen, setIsOpen] = useState(false);
@@ -8,10 +9,16 @@ export const ReviewButton = () => {
 
   const handleSubmit = async () => {
     try {
+      const currentUser = auth.currentUser;
       await fetch('/api/send-review', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ review })
+        body: JSON.stringify({ 
+          review,
+          userEmail: currentUser?.email || 'Anonymous/Unauthenticated',
+          userDisplayName: currentUser?.displayName || 'Anonymous User',
+          type: 'Floating Experience Feedback'
+        })
       });
       alert('Thank you for your feedback!');
       setReview('');

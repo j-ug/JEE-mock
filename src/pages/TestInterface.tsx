@@ -51,6 +51,11 @@ export default function TestInterface({ examId, onExit }: TestInterfaceProps) {
   const [timeLeftRedirect, setTimeLeftRedirect] = useState(15);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [holdProgress, setHoldProgress] = useState(0);
+  const [violationCount, setViolationCount] = useState(0);
+  const [showViolationModal, setShowViolationModal] = useState(false);
+  const [violationReason, setViolationReason] = useState('');
+  const violationCountRef = useRef(0);
+  const lastViolationTimeRef = useRef(Date.now());
   const holdIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const lastInteractionTimeRef = useRef<number>(Date.now());
   
@@ -292,39 +297,59 @@ export default function TestInterface({ examId, onExit }: TestInterfaceProps) {
   useEffect(() => {
     const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || window.innerWidth < 768;
     
-    const handleSecurityViolation = (event?: any) => {
-      // Disable aggressive blur/visibility checks on mobile as they are unreliable in mobile browser environments
+    const handleSecurityViolation = (type: 'tab-escape' | 'minimize' | 'fullscreen-exit') => {
       if (isMobile) return;
+      if (isSubmitting || showResult) return;
 
-      if (isFullscreen && !isSubmitting && !showResult) {
-        console.warn('SECURITY_VIOLATION: Event triggered AUTO_SUBMIT', event?.type);
-        alert('SECURITY PROTOCOL TERMINATION: Unauthorized context switch detected. Session archived.');
+      // Throttle focus escape triggers to prevent double hits due to full-screen toggling
+      if (Date.now() - lastViolationTimeRef.current < 2500) return;
+      lastViolationTimeRef.current = Date.now();
+
+      violationCountRef.current += 1;
+      const currentCount = violationCountRef.current;
+      setViolationCount(currentCount);
+
+      if (currentCount >= 3) {
+        console.warn('SECURITY_VIOLATION: Max limits reached. AUTO-SUBMITTING.', type);
+        alert('SECURITY PROTOCOL TERMINATION: Too many focus escapes or window minimizations (3/3). This session is closed and automatic submission is active.');
         handleSubmit();
+      } else {
+        console.warn('SECURITY_WARNING: Focus/Tab escape detected. Warning count:', currentCount);
+        setViolationReason(
+          type === 'tab-escape' ? 'Tab switching or leaving the secure page was detected.' :
+          type === 'minimize' ? 'Browser focus loss or minimizing the window was detected.' :
+          'The forced full-screen viewing mode was exited or minimized.'
+        );
+        setShowViolationModal(true);
       }
     };
 
     const handleFullscreenChange = () => {
       const isStillFS = !!document.fullscreenElement;
       if (isFullscreen && !isStillFS && !isSubmitting && !showResult) {
-        handleSecurityViolation({ type: 'fullscreenexit' });
+        handleSecurityViolation('fullscreen-exit');
       }
       setIsFullscreen(isStillFS);
     };
 
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'hidden') {
-        handleSecurityViolation({ type: 'visibilityhidden' });
+      if (document.visibilityState === 'hidden' && isFullscreen && !isSubmitting && !showResult) {
+        handleSecurityViolation('tab-escape');
       }
     };
 
-    window.addEventListener('blur', handleSecurityViolation);
-    window.addEventListener('beforeunload', handleSecurityViolation);
+    const handleWindowBlur = () => {
+      if (isFullscreen && !isSubmitting && !showResult) {
+        handleSecurityViolation('minimize');
+      }
+    };
+
+    window.addEventListener('blur', handleWindowBlur);
     document.addEventListener('visibilitychange', handleVisibilityChange);
     document.addEventListener('fullscreenchange', handleFullscreenChange);
 
     return () => {
-      window.removeEventListener('blur', handleSecurityViolation);
-      window.removeEventListener('beforeunload', handleSecurityViolation);
+      window.removeEventListener('blur', handleWindowBlur);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
     };
@@ -375,7 +400,7 @@ export default function TestInterface({ examId, onExit }: TestInterfaceProps) {
   const currentQuestion = currentQuestions[activeQuestionIdx];
 
   useEffect(() => {
-    if (loading || !exam || showResult || isSubmitting) return;
+    if (loading || !exam || showResult || isSubmitting || showViolationModal) return;
     
     timerRef.current = setInterval(() => {
       setTimeLeft(prev => {
@@ -411,7 +436,7 @@ export default function TestInterface({ examId, onExit }: TestInterfaceProps) {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [loading, exam, handleSubmit, currentQuestion, showResult, isSubmitting]);
+  }, [loading, exam, handleSubmit, currentQuestion, showResult, isSubmitting, showViolationModal]);
 
   // Real-time progress synchronization for Live Monitor
   useEffect(() => {
@@ -870,6 +895,65 @@ export default function TestInterface({ examId, onExit }: TestInterfaceProps) {
                   ABORT & RESUME
                 </button>
               </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Security Violation Overlay Modal */}
+      <AnimatePresence>
+        {showViolationModal && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[120] bg-slate-950/90 backdrop-blur-2xl flex items-center justify-center p-6"
+          >
+            <motion.div 
+              initial={{ scale: 0.9, y: 30 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.9, y: 30 }}
+              className="bg-slate-900 border border-red-500/30 rounded-[40px] w-full max-w-xl p-10 text-center shadow-2xl relative overflow-hidden text-white"
+            >
+              {/* Pulsing glow background effect */}
+              <div className="absolute -top-24 -left-24 w-48 h-48 bg-red-600/10 rounded-full blur-3xl animate-pulse" />
+              <div className="absolute -bottom-24 -right-24 w-48 h-48 bg-red-600/10 rounded-full blur-3xl animate-pulse" />
+
+              <div className="w-20 h-20 bg-red-500/20 border border-red-500/30 rounded-3xl flex items-center justify-center text-red-400 mx-auto mb-8 animate-pulse">
+                <AlertTriangle size={44} />
+              </div>
+              
+              <h3 className="text-3xl font-black text-white uppercase tracking-tight mb-2 italic">
+                Security Intercepted
+              </h3>
+              
+              <div className="px-4 py-1.5 bg-red-500/10 border border-red-500/20 rounded-full inline-block mb-6">
+                <p className="text-red-400 text-xs font-black uppercase tracking-widest">
+                  Warning {violationCount} of 2
+                </p>
+              </div>
+
+              <div className="bg-slate-950/50 border border-white/5 rounded-2xl p-5 mb-8 text-left">
+                <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">
+                  Logged Instability Type
+                </p>
+                <p className="text-sm font-bold text-slate-300 italic mb-3">
+                  {violationReason || 'Unauthorized window escape or context modification.'}
+                </p>
+                <p className="text-xs text-slate-400 leading-relaxed font-semibold">
+                  Leaving the browser tab, minimizing the window, or focus switching triggers a protocol violation. On the 3rd infraction, the session will immediately be force-submitted.
+                </p>
+              </div>
+
+              <button 
+                onClick={() => {
+                  enterFullscreen();
+                  setShowViolationModal(false);
+                }}
+                className="w-full bg-red-600 hover:bg-red-700 text-white py-5 rounded-2xl font-black uppercase tracking-[0.15em] hover:shadow-xl hover:shadow-red-900/30 active:scale-95 transition-all text-sm"
+              >
+                Resume Secure Exam
+              </button>
             </motion.div>
           </motion.div>
         )}

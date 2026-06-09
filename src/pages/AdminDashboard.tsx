@@ -1821,11 +1821,60 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
               >
                 <div className="mb-12">
                   <h2 className="text-4xl font-black text-slate-900 mb-2">Experiences & Reviews</h2>
-                  <p className="text-slate-500 font-medium italic">Overview of system feedback and functional audit logs.</p>
+                  <p className="text-slate-500 font-medium italic">Overview of system feedback, experience reviews, and functional audit logs.</p>
                 </div>
-                <div className="bg-white rounded-3xl border border-slate-200 p-8 text-center text-slate-500">
-                   No reviews or audit logs available at this time.
-                </div>
+                
+                {allUsers.filter(u => u.review && u.review.trim() !== '').length > 0 ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {allUsers.filter(u => u.review && u.review.trim() !== '').map((userWithReview) => (
+                      <div 
+                        key={userWithReview.uid} 
+                        className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex flex-col justify-between transition-all hover:shadow-md"
+                      >
+                        <div>
+                          <div className="flex items-center justify-between mb-4">
+                            <div>
+                              <h3 className="font-black text-slate-900 text-lg">{userWithReview.displayName}</h3>
+                              <p className="text-xs text-slate-400 font-medium">{userWithReview.email}</p>
+                            </div>
+                            <span className={cn(
+                              "px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-wider",
+                              userWithReview.role === 'admin' ? "bg-red-50 text-red-700 border border-red-100" :
+                              userWithReview.role === 'staff' ? "bg-amber-50 text-amber-700 border border-amber-100" :
+                              "bg-blue-50 text-blue-700 border border-blue-100"
+                            )}>
+                              {userWithReview.role}
+                            </span>
+                          </div>
+                          
+                          <p className="text-slate-700 text-sm whitespace-pre-wrap leading-relaxed italic bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                            "{userWithReview.review}"
+                          </p>
+                        </div>
+                        
+                        <div className="mt-4 flex items-center justify-between text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+                          <span>Profile Audit</span>
+                          {userWithReview.updatedAt && (
+                            <span>
+                              {userWithReview.updatedAt.toDate().toLocaleDateString(undefined, { 
+                                year: 'numeric', 
+                                month: 'short', 
+                                day: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit'
+                              })}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="bg-white rounded-3xl border border-slate-200 p-12 text-center text-slate-500 max-w-xl mx-auto shadow-sm">
+                     <p className="font-bold text-slate-700 mb-1">No profile reviews received yet</p>
+                     <p className="text-xs text-slate-400">When users submit audit reviews from their account settings, they will populate here in real-time.</p>
+                  </div>
+                )}
               </motion.div>
             )}
 

@@ -115,6 +115,23 @@ export default function SettingsModal({ user, profile, onClose }: SettingsModalP
         review,
         updatedAt: serverTimestamp()
       }));
+      
+      // Send the email notification
+      try {
+        await fetch('/api/send-review', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            review,
+            userEmail: profile.email || user.email || 'Anonymous',
+            userDisplayName: profile.displayName || user.displayName || 'Anonymous User',
+            type: 'System Profile Audit Review'
+          })
+        });
+      } catch (emailErr) {
+        console.error('Email notification failed but state was updated:', emailErr);
+      }
+      
       setSuccess('Audit review submitted successfully!');
     } catch (err: any) {
       setError(err.message || 'Failed to submit review');

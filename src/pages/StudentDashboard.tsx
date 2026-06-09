@@ -381,6 +381,59 @@ export default function StudentDashboard({ onStartTest }: StudentDashboardProps)
       score: s.calculatedScore
     })), [submissions, exams]);
 
+  const subjectProficiencyData = React.useMemo(() => {
+    const subjects = {
+      Maths: { correct: 0, total: 0 },
+      Physics: { correct: 0, total: 0 },
+      Chemistry: { correct: 0, total: 0 }
+    };
+
+    submissions
+      .filter(s => s.status === 'completed')
+      .forEach(s => {
+        const exam = exams.find(e => e.id === s.examId);
+        if (!exam || !exam.sections) return;
+
+        Object.entries(exam.sections).forEach(([subjectName, section]: [string, any]) => {
+          if (!section) return;
+          const subKey = subjectName as 'Maths' | 'Physics' | 'Chemistry';
+          if (!subjects[subKey]) return;
+
+          const questionIds = [
+            ...(section.mcqs || []).map((q: any) => q.id),
+            ...(section.numericals || []).map((q: any) => q.id)
+          ];
+
+          questionIds.forEach(qId => {
+            const response = s.answers?.[qId];
+            const correct = exam.answerKey?.[qId];
+
+            subjects[subKey].total += 1;
+
+            if (response && (response.status === 'attempted' || response.status === 'marked') && response.value !== null && response.value !== '') {
+              const isCorrect = typeof correct === 'number'
+                ? Math.abs(Number(response.value) - Number(correct)) < 0.01
+                : String(response.value).trim().toUpperCase() === String(correct).trim().toUpperCase();
+
+              if (isCorrect) {
+                subjects[subKey].correct += 1;
+              }
+            }
+          });
+        });
+      });
+
+    return Object.entries(subjects).map(([subject, info]) => {
+      const percentage = info.total > 0 ? Math.round((info.correct / info.total) * 100) : 0;
+      return {
+        subject,
+        proficiency: percentage,
+        correct: info.correct,
+        total: info.total
+      };
+    });
+  }, [submissions, exams]);
+
   const handleDeleteAccount = async () => {
     if (!profile?.uid || deleteConfirmInput.toLowerCase() !== 'delete') return;
     
@@ -1507,6 +1560,97 @@ export default function StudentDashboard({ onStartTest }: StudentDashboardProps)
                        Download Detailed Report <ArrowUpRight size={14} />
                     </button>
                 </div>
+              </div>
+            </section>
+
+            <section className="bg-white border border-slate-200 rounded-[40px] p-10 shadow-2xl relative overflow-hidden">
+              <div className="absolute top-0 right-0 w-40 h-40 bg-blue-50/20 rounded-full -translate-y-1/2 translate-x-1/2" />
+              
+              <div className="relative z-10">
+                <header className="mb-10">
+                  <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.3em] mb-3">Subject Proficiency</h3>
+                  <p className="text-xs text-slate-500 font-medium italic leading-relaxed">Performance accuracy computed across Maths, Physics, and Chemistry questions.</p>
+                </header>
+
+                <div className="mb-8 h-64 w-full flex items-center justify-center">
+                  {submissions.filter(s => s.status === 'completed').length > 0 ? (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={subjectProficiencyData} margin={{ top: 20, right: 10, left: -25, bottom: 5 }}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                        <XAxis 
+                          dataKey="subject" 
+                          stroke="#94a3b8" 
+                          fontSize={11} 
+                          fontWeight={800} 
+                          tickLine={false}
+                          axisLine={false}
+                        />
+                        <YAxis 
+                          stroke="#94a3b8" 
+                          fontSize={11} 
+                          fontWeight={800} 
+                          tickLine={false}
+                          axisLine={false}
+                          domain={[0, 100]}
+                          tickFormatter={(value) => `${value}%`}
+                        />
+                        <Tooltip
+                          cursor={{ fill: '#f8fafc', radius: 12 }}
+                          contentStyle={{ borderRadius: '24px', border: 'none', boxShadow: '0 25px 50px -12px rgb(0 0 0 / 0.15)', background: '#0f172a', color: 'white' }}
+                          formatter={(value) => [`${value}% Accuracy`, `Subject split`]}
+                        />
+                        <Bar dataKey="proficiency" radius={[12, 12, 0, 0]} maxBarSize={48}>
+                          {subjectProficiencyData.map((entry, index) => {
+                            const colors = {
+                              Maths: '#2563eb',     // Blue
+                              Physics: '#ef4444',   // Red
+                              Chemistry: '#10b981' // Green
+                            };
+                            return (
+                              <Cell 
+                                key={`cell-${index}`} 
+                                fill={colors[entry.subject as 'Maths' | 'Physics' | 'Chemistry'] || '#6366f1'} 
+                              />
+                            );
+                          })}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <div className="h-full w-full flex items-center justify-center border-2 border-dashed border-slate-100 rounded-3xl bg-slate-50/50">
+                       <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest italic text-center px-4 leading-relaxed">Complete an exam first to see your subject proficiency analysis</p>
+                    </div>
+                  )}
+                </div>
+
+                {submissions.filter(s => s.status === 'completed').length > 0 && (
+                  <div className="space-y-4">
+                    {subjectProficiencyData.map((data) => (
+                      <div key={data.subject} className="flex items-center justify-between p-4 bg-slate-50 border border-slate-100 rounded-2xl">
+                        <div className="flex items-center gap-3">
+                          <span className={cn(
+                            "w-3 h-3 rounded-full",
+                            data.subject === 'Maths' ? "bg-blue-600" :
+                            data.subject === 'Physics' ? "bg-red-500" :
+                            "bg-emerald-500"
+                          )} />
+                          <div>
+                            <p className="text-xs font-black text-slate-900 uppercase tracking-wider">{data.subject}</p>
+                            <p className="text-[10px] text-slate-400 font-medium">{data.correct} correct out of {data.total} total items</p>
+                          </div>
+                        </div>
+                        <span className={cn(
+                          "px-3 py-1.5 rounded-full text-xs font-black tracking-tight",
+                          data.proficiency >= 75 ? "bg-emerald-50 text-emerald-700 border border-emerald-100" :
+                          data.proficiency >= 45 ? "bg-blue-50 text-blue-700 border border-blue-100" :
+                          "bg-amber-50 text-amber-700 border border-amber-100"
+                        )}>
+                          {data.proficiency}% Accuracy
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </section>
 
