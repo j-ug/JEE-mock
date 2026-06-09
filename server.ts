@@ -25,14 +25,23 @@ async function startServer() {
   // AI Exam Generation Endpoint
   app.post("/api/ai/generate-exam", async (req, res) => {
     try {
-      const { topic, difficulty, questionCount = 10, sections = ["Maths", "Physics", "Chemistry"] } = req.body;
+      const { topic, difficulty, questionCount = 10, preparationType = "JEE" } = req.body;
+
+      const sectArray = preparationType === "JEE" ? ["Maths", "Physics", "Chemistry"]
+        : preparationType === "NEET" ? ["Biology", "Physics", "Chemistry"]
+        : ["Maths", "Biology", "Physics", "Chemistry"];
+
+      const sectionsSchemaStr = sectArray.reduce((acc, s) => {
+        acc += `\n          "${s}": { "name": "${s}", "mcqs": [...], "numericals": [...] },`;
+        return acc;
+      }, "").slice(0, -1);
 
       const prompt = `Generate a realistic and high-quality exam based on the topic: "${topic}". 
-      Difficulty Level: ${difficulty} (e.g., Easy, Medium, Hard, JEE Advanced level).
+      Difficulty Level: ${difficulty} (e.g., Easy, Medium, Hard, JEE Advanced/NEET standard level).
       Total questions: ${questionCount}.
-      Divide them into sections: ${sections.join(", ")}.
+      Divide them into sections: ${sectArray.join(", ")}.
       
-      ${questionCount == 75 ? "Set numericals to 5 per section (total 15), and the remaining 20 questions per section as MCQs." : "Each section should contain both 'mcqs' and 'numericals'."}
+      ${questionCount == 75 ? "Set numericals to 5 per section, and the remaining questions as MCQs." : "Each section should contain both 'mcqs' and 'numericals'."}
       MCQs must have 4 options labeled A, B, C, and D. There must be 1 correct answer. The 'correctAnswer' field MUST be the option label (e.g., "A").
       Numericals must have a single number as the answer.
       
@@ -40,10 +49,7 @@ async function startServer() {
       {
         "title": "Exam Title",
         "duration": 180,
-        "sections": {
-          "Maths": { "name": "Maths", "mcqs": [...], "numericals": [...] },
-          "Physics": { "name": "Physics", "mcqs": [...], "numericals": [...] },
-          "Chemistry": { "name": "Chemistry", "mcqs": [...], "numericals": [...] }
+        "sections": {${sectionsSchemaStr}
         }
       }
       

@@ -384,6 +384,7 @@ export default function StudentDashboard({ onStartTest }: StudentDashboardProps)
   const subjectProficiencyData = React.useMemo(() => {
     const subjects = {
       Maths: { correct: 0, total: 0 },
+      Biology: { correct: 0, total: 0 },
       Physics: { correct: 0, total: 0 },
       Chemistry: { correct: 0, total: 0 }
     };
@@ -396,7 +397,7 @@ export default function StudentDashboard({ onStartTest }: StudentDashboardProps)
 
         Object.entries(exam.sections).forEach(([subjectName, section]: [string, any]) => {
           if (!section) return;
-          const subKey = subjectName as 'Maths' | 'Physics' | 'Chemistry';
+          const subKey = subjectName as 'Maths' | 'Physics' | 'Chemistry' | 'Biology';
           if (!subjects[subKey]) return;
 
           const questionIds = [
@@ -423,15 +424,17 @@ export default function StudentDashboard({ onStartTest }: StudentDashboardProps)
         });
       });
 
-    return Object.entries(subjects).map(([subject, info]) => {
-      const percentage = info.total > 0 ? Math.round((info.correct / info.total) * 100) : 0;
-      return {
-        subject,
-        proficiency: percentage,
-        correct: info.correct,
-        total: info.total
-      };
-    });
+    return Object.entries(subjects)
+      .filter(([_, info]) => info.total > 0) // only show subjects that user actually has mock exam questions for!
+      .map(([subject, info]) => {
+        const percentage = info.total > 0 ? Math.round((info.correct / info.total) * 100) : 0;
+        return {
+          subject,
+          proficiency: percentage,
+          correct: info.correct,
+          total: info.total
+        };
+      });
   }, [submissions, exams]);
 
   const handleDeleteAccount = async () => {
@@ -1569,7 +1572,7 @@ export default function StudentDashboard({ onStartTest }: StudentDashboardProps)
               <div className="relative z-10">
                 <header className="mb-10">
                   <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.3em] mb-3">Subject Proficiency</h3>
-                  <p className="text-xs text-slate-500 font-medium italic leading-relaxed">Performance accuracy computed across Maths, Physics, and Chemistry questions.</p>
+                  <p className="text-xs text-slate-500 font-medium italic leading-relaxed">Performance accuracy computed across Maths, Biology, Physics, and Chemistry questions.</p>
                 </header>
 
                 <div className="mb-8 h-64 w-full flex items-center justify-center">
@@ -1601,15 +1604,16 @@ export default function StudentDashboard({ onStartTest }: StudentDashboardProps)
                         />
                         <Bar dataKey="proficiency" radius={[12, 12, 0, 0]} maxBarSize={48}>
                           {subjectProficiencyData.map((entry, index) => {
-                            const colors = {
+                            const colors: Record<string, string> = {
                               Maths: '#2563eb',     // Blue
+                              Biology: '#a855f7',   // Purple
                               Physics: '#ef4444',   // Red
-                              Chemistry: '#10b981' // Green
+                              Chemistry: '#10b981'  // Green
                             };
                             return (
                               <Cell 
                                 key={`cell-${index}`} 
-                                fill={colors[entry.subject as 'Maths' | 'Physics' | 'Chemistry'] || '#6366f1'} 
+                                fill={colors[entry.subject] || '#6366f1'} 
                               />
                             );
                           })}
@@ -1631,6 +1635,7 @@ export default function StudentDashboard({ onStartTest }: StudentDashboardProps)
                           <span className={cn(
                             "w-3 h-3 rounded-full",
                             data.subject === 'Maths' ? "bg-blue-600" :
+                            data.subject === 'Biology' ? "bg-purple-500" :
                             data.subject === 'Physics' ? "bg-red-500" :
                             "bg-emerald-500"
                           )} />

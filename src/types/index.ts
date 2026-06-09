@@ -43,9 +43,10 @@ export interface Exam {
   endTime: Timestamp;
   duration: number; // minutes
   sections: {
-    Maths: ExamSection;
-    Physics: ExamSection;
-    Chemistry: ExamSection;
+    Maths?: ExamSection;
+    Biology?: ExamSection;
+    Physics?: ExamSection;
+    Chemistry?: ExamSection;
   };
   answerKey: Record<string, string | number>;
   createdBy: string;

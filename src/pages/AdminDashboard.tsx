@@ -126,6 +126,7 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
     endTime: '',
     sections: {
       Maths: { mcqs: [], numericals: [] },
+      Biology: { mcqs: [], numericals: [] },
       Physics: { mcqs: [], numericals: [] },
       Chemistry: { mcqs: [], numericals: [] }
     }
@@ -363,6 +364,7 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
              if (lowerS.includes('math')) sectionName = 'Maths';
              else if (lowerS.includes('phys')) sectionName = 'Physics';
              else if (lowerS.includes('chem')) sectionName = 'Chemistry';
+             else if (lowerS.includes('biol') || lowerS.includes('bio')) sectionName = 'Biology';
              else {
                sectionName = (Object.keys(newSections) as (keyof typeof newSections)[]).find(
                  key => (key as string).toLowerCase() === lowerS
@@ -473,9 +475,10 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
   };
   
   // Section Management State
-  const [activeCreationSection, setActiveCreationSection] = useState<'Maths' | 'Physics' | 'Chemistry'>('Maths');
+  const [activeCreationSection, setActiveCreationSection] = useState<'Maths' | 'Physics' | 'Chemistry' | 'Biology'>('Maths');
   const [sectionsData, setSectionsData] = useState({
     Maths: { mcqs: [] as any[], numericals: [] as any[] },
+    Biology: { mcqs: [] as any[], numericals: [] as any[] },
     Physics: { mcqs: [] as any[], numericals: [] as any[] },
     Chemistry: { mcqs: [] as any[], numericals: [] as any[] }
   });
@@ -818,7 +821,7 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
     const newSections = JSON.parse(JSON.stringify(sectionsData));
     let compressedCount = 0;
     
-    for (const sectionName of ['Maths', 'Physics', 'Chemistry'] as const) {
+    for (const sectionName of ['Maths', 'Physics', 'Chemistry', 'Biology'] as const) {
       const section = newSections[sectionName];
       
       const processQuestion = async (q: any) => {
@@ -874,7 +877,14 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
       const answerKey: Record<string, string | number> = {};
       const finalSections: any = {};
 
-      (Object.entries(sectionsData) as [keyof typeof sectionsData, typeof sectionsData['Maths']][]).forEach(([name, data]) => {
+      const applicableSections = preparationTypeExam === 'JEE' ? ['Maths', 'Physics', 'Chemistry']
+        : preparationTypeExam === 'NEET' ? ['Biology', 'Physics', 'Chemistry']
+        : ['Maths', 'Biology', 'Physics', 'Chemistry'];
+
+      applicableSections.forEach((name) => {
+        const data = sectionsData[name as keyof typeof sectionsData];
+        if (!data) return;
+
         finalSections[name] = {
           name,
           mcqs: data.mcqs.map(q => {
@@ -968,6 +978,7 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
   const resetForm = () => {
     setSectionsData({
       Maths: { mcqs: [], numericals: [] },
+      Biology: { mcqs: [], numericals: [] },
       Physics: { mcqs: [], numericals: [] },
       Chemistry: { mcqs: [], numericals: [] }
     });
@@ -976,6 +987,8 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
     setEditingExamId(null);
     setStartTime(format(new Date(), "yyyy-MM-dd'T'HH:mm"));
     setEndTime(format(addHours(new Date(), 24), "yyyy-MM-dd'T'HH:mm"));
+    setPreparationTypeExam('JEE');
+    setActiveCreationSection('Maths');
   };
 
   const handleDuplicateExam = async (examToDuplicate: Exam) => {
@@ -1008,14 +1021,18 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
     setStartTime(format(exam.startTime.toDate(), "yyyy-MM-dd'T'HH:mm"));
     setEndTime(format(exam.endTime.toDate(), "yyyy-MM-dd'T'HH:mm"));
     
+    const pType = exam.preparationType || 'JEE';
+    setPreparationTypeExam(pType);
+
     const newSectionsData = {
       Maths: { mcqs: [] as any[], numericals: [] as any[] },
+      Biology: { mcqs: [] as any[], numericals: [] as any[] },
       Physics: { mcqs: [] as any[], numericals: [] as any[] },
       Chemistry: { mcqs: [] as any[], numericals: [] as any[] }
     };
 
-    (['Maths', 'Physics', 'Chemistry'] as const).forEach(s => {
-      const section = exam.sections?.[s];
+    (['Maths', 'Physics', 'Chemistry', 'Biology'] as const).forEach(s => {
+      const section = exam.sections?.[s as any];
       if (section) {
         newSectionsData[s].mcqs = section.mcqs.map(q => ({
           ...q,
@@ -1031,6 +1048,8 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
     });
 
     setSectionsData(newSectionsData);
+    const initialSection = pType === 'NEET' ? 'Biology' : 'Maths';
+    setActiveCreationSection(initialSection);
     setShowCreateModal(true);
   };
 
@@ -2694,7 +2713,14 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
                     {(['JEE', 'NEET', 'Both'] as const).map(p => (
                       <button
                         key={p}
-                        onClick={() => setPreparationTypeExam(p)}
+                        onClick={() => {
+                          setPreparationTypeExam(p);
+                          if (p === 'JEE' && activeCreationSection === 'Biology') {
+                            setActiveCreationSection('Maths');
+                          } else if (p === 'NEET' && activeCreationSection === 'Maths') {
+                            setActiveCreationSection('Biology');
+                          }
+                        }}
                         className={cn(
                           "px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all",
                           preparationTypeExam === p ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-400 hover:bg-slate-200"
@@ -2752,7 +2778,9 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
                     </div>
                   </div>                
                   <div className="flex gap-2 mb-6">
-                    {(['Maths', 'Physics', 'Chemistry'] as const).map(s => (
+                    {(preparationTypeExam === 'JEE' ? (['Maths', 'Physics', 'Chemistry'] as const)
+                     : preparationTypeExam === 'NEET' ? (['Biology', 'Chemistry', 'Physics'] as const)
+                     : (['Maths', 'Biology', 'Chemistry', 'Physics'] as const)).map(s => (
                       <button
                         key={s}
                         onClick={() => setActiveCreationSection(s)}

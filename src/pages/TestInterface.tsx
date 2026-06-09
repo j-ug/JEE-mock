@@ -39,7 +39,7 @@ export default function TestInterface({ examId, onExit }: TestInterfaceProps) {
   const [exam, setExam] = useState<Exam | null>(null);
   const [loading, setLoading] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [activeSection, setActiveSection] = useState<'Maths' | 'Physics' | 'Chemistry'>('Maths');
+  const [activeSection, setActiveSection] = useState<'Maths' | 'Physics' | 'Chemistry' | 'Biology'>('Maths');
   const [activeQuestionIdx, setActiveQuestionIdx] = useState(0); 
   const [answers, setAnswers] = useState<Record<string, SubmissionResponse>>({});
   const [sectionTimeSpent, setSectionTimeSpent] = useState<Record<string, number>>({});
@@ -176,6 +176,13 @@ export default function TestInterface({ examId, onExit }: TestInterfaceProps) {
           const examData = { id: docSnap.id, ...docSnap.data() } as Exam;
           setExam(examData);
           setTimeLeft(Number(examData.duration) > 0 ? Number(examData.duration) * 60 : 180 * 60);
+
+          if (examData.sections) {
+            const firstSec = Object.keys(examData.sections).find(s => examData.sections[s as keyof typeof examData.sections]);
+            if (firstSec) {
+              setActiveSection(firstSec as any);
+            }
+          }
 
           const subId = `${profile.uid}_${targetExamId}`;
           console.log('INIT_SEQ: Synchronizing Submission State [ID: ' + subId + ']');
@@ -774,10 +781,10 @@ export default function TestInterface({ examId, onExit }: TestInterfaceProps) {
           </div>
           
           <div className="flex gap-1 md:gap-2">
-            {(['Maths', 'Physics', 'Chemistry'] as const).map(s => (
+            {Object.keys(exam.sections || {}).filter(s => exam.sections[s as keyof typeof exam.sections]).map(s => (
               <button
                 key={s}
-                onClick={() => { setActiveSection(s); setActiveQuestionIdx(0); }}
+                onClick={() => { setActiveSection(s as any); setActiveQuestionIdx(0); }}
                 className={cn(
                   "px-2 md:px-8 py-1 md:py-3 rounded-lg md:rounded-2xl text-[7px] md:text-[10px] font-black uppercase tracking-widest transition-all",
                   activeSection === s ? "bg-blue-600 text-white shadow-lg shadow-blue-600/20 border-transparent" : "text-slate-500 hover:text-white border border-slate-800"
