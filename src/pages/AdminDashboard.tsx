@@ -302,7 +302,12 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
       const resp = await fetch('/api/ai/generate-exam', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ topic: aiTopic, difficulty: aiDifficulty, questionCount: aiQuestionCount })
+        body: JSON.stringify({ 
+          topic: aiTopic, 
+          difficulty: aiDifficulty, 
+          questionCount: aiQuestionCount,
+          preparationType: preparationTypeExam
+        })
       });
       const data = await resp.json();
       if (data.error) throw new Error(data.error);

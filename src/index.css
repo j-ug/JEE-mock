@@ -9,5 +9,5 @@
 }
 
 body {
-  @apply font-sans text-slate-800 bg-slate-50;
+  @apply font-sans text-slate-800 bg-slate-50 min-h-[100vh];
 }

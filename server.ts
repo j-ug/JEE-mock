@@ -21,6 +21,31 @@ const ai = new GoogleGenAI({
   }
 });
 
+async function callGeminiWithRetry(prompt: string, maxRetries = 3): Promise<any> {
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      const response = await ai.models.generateContent({
+        model: "gemini-3.1-flash-lite",
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+        },
+      });
+      return JSON.parse(response.text);
+    } catch (error: any) {
+      const isRateLimited = error.message?.includes("429") || error.message?.includes("RESOURCE_EXHAUSTED");
+      
+      if (isRateLimited && i < maxRetries - 1) {
+        const delay = Math.pow(2, i) * 2000 + Math.random() * 1000;
+        console.warn(`[AI Generator] Rate limit hit. Retrying in ${Math.round(delay)}ms... (Attempt ${i + 1}/${maxRetries})`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
 async function startServer() {
   // AI Exam Generation Endpoint
   app.post("/api/ai/generate-exam", async (req, res) => {
@@ -31,47 +56,67 @@ async function startServer() {
         : preparationType === "NEET" ? ["Biology", "Physics", "Chemistry"]
         : ["Maths", "Biology", "Physics", "Chemistry"];
 
-      const sectionsSchemaStr = sectArray.reduce((acc, s) => {
-        acc += `\n          "${s}": { "name": "${s}", "mcqs": [...], "numericals": [...] },`;
-        return acc;
-      }, "").slice(0, -1);
+      const numSections = sectArray.length;
+      const baseQuestions = Math.floor(questionCount / numSections);
+      const remainder = questionCount % numSections;
 
-      const prompt = `Generate a realistic and high-quality exam based on the topic: "${topic}". 
-      Difficulty Level: ${difficulty} (e.g., Easy, Medium, Hard, JEE Advanced/NEET standard level).
-      Total questions: ${questionCount}.
-      Divide them into sections: ${sectArray.join(", ")}.
-      
-      ${questionCount == 75 ? "Set numericals to 5 per section, and the remaining questions as MCQs." : "Each section should contain both 'mcqs' and 'numericals'."}
-      MCQs must have 4 options labeled A, B, C, and D. There must be 1 correct answer. The 'correctAnswer' field MUST be the option label (e.g., "A").
-      Numericals must have a single number as the answer.
-      
-      Return the result in JSON format matching this schema:
-      {
-        "title": "Exam Title",
-        "duration": 180,
-        "sections": {${sectionsSchemaStr}
-        }
-      }
-      
-      Question Schema:
-      {
-        "id": "unique_string",
-        "type": "mcq" | "numerical",
-        "text": "Question text",
-        "options": ["A", "B", "C", "D"], // only for mcq
-        "correctAnswer": "Answer"
-      }`;
-
-      const response = await ai.models.generateContent({
-        model: "gemini-3.5-flash",
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json",
-        },
+      // Map out how many questions to allocate to each section
+      const sectionAllocations = sectArray.map((sec, index) => {
+        return { name: sec, count: baseQuestions + (index < remainder ? 1 : 0) };
       });
 
-      const examData = JSON.parse(response.text);
-      res.json(examData);
+      console.log(`[AI Generator] Synthesizing ${questionCount} total items for theme "${topic}" (${difficulty})`);
+      console.log(`[AI Generator] Preparation Type: ${preparationType}. Sections: ${sectArray.join(", ")}`);
+      
+      // Determine split for each section
+      const sectionSchemaStr = sectionAllocations.filter(s => s.count > 0).map((sec, index) => {
+        let numericalCount = 0;
+        if (sec.count >= 25) numericalCount = 5;
+        else if (sec.count >= 10) numericalCount = 3;
+        else if (sec.count >= 5) numericalCount = 1;
+        else numericalCount = Math.floor(sec.count * 0.2) || 1;
+        
+        numericalCount = Math.min(numericalCount, sec.count);
+        const mcqCount = Math.max(0, sec.count - numericalCount);
+        
+        return `
+        "${sec.name}": {
+          "name": "${sec.name}",
+          "mcqs": [ // MUST contain exactly ${mcqCount} MCQ questions
+             { "id": "...", "type": "mcq", "text": "...", "options": ["A", "B", "C", "D"], "correctAnswer": "A" }
+          ],
+          "numericals": [ // MUST contain exactly ${numericalCount} numerical questions
+             { "id": "...", "type": "numerical", "text": "...", "correctAnswer": "5" }
+          ]
+        }`;
+      }).join(",");
+
+      const prompt = `You are a specialized JEE and NEET academic expert. Generate a realistic, high-quality, syllabus-conforming exam on the topic "${topic}".
+Difficulty Level: ${difficulty} (standard level).
+
+You MUST return a single valid JSON object representing the entire exam strictly matching this schema:
+{
+  "title": "${topic} Evaluation Test (${difficulty})",
+  "duration": 180,
+  "sections": {${sectionSchemaStr}
+  }
+}
+
+Keep questions scientifically and mathematically sound. Only output the JSON object. Do not wrap in markdown blocks, formatting, or extra text.`;
+
+      const finalExam = await callGeminiWithRetry(prompt);
+      
+      // Safety check (ensure sections object exists)
+      if (!finalExam.sections) finalExam.sections = {};
+      
+      // Ensure missing sections are added as empty
+      sectArray.forEach(sec => {
+        if (!finalExam.sections[sec]) {
+          finalExam.sections[sec] = { name: sec, mcqs: [], numericals: [] };
+        }
+      });
+
+      res.json(finalExam);
     } catch (error: any) {
       console.error("AI Generation Error:", error);
       res.status(500).json({ error: error.message });
