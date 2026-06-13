@@ -34,10 +34,11 @@ async function callGeminiWithRetry(prompt: string, maxRetries = 3): Promise<any>
       return JSON.parse(response.text);
     } catch (error: any) {
       const isRateLimited = error.message?.includes("429") || error.message?.includes("RESOURCE_EXHAUSTED");
+      const isJsonError = error instanceof SyntaxError || error.message?.includes("JSON");
       
-      if (isRateLimited && i < maxRetries - 1) {
+      if ((isRateLimited || isJsonError) && i < maxRetries - 1) {
         const delay = Math.pow(2, i) * 2000 + Math.random() * 1000;
-        console.warn(`[AI Generator] Rate limit hit. Retrying in ${Math.round(delay)}ms... (Attempt ${i + 1}/${maxRetries})`);
+        console.warn(`[AI Generator] Error (${isJsonError ? 'JSON Error' : 'Rate Limit'}). Retrying in ${Math.round(delay)}ms... (Attempt ${i + 1}/${maxRetries})`);
         await new Promise(resolve => setTimeout(resolve, delay));
         continue;
       }
@@ -68,53 +69,78 @@ async function startServer() {
       console.log(`[AI Generator] Synthesizing ${questionCount} total items for theme "${topic}" (${difficulty})`);
       console.log(`[AI Generator] Preparation Type: ${preparationType}. Sections: ${sectArray.join(", ")}`);
       
-      // Determine split for each section
-      const sectionSchemaStr = sectionAllocations.filter(s => s.count > 0).map((sec, index) => {
+      // Parallel section generation execution to solve the timeout (Failed to fetch) issue and truncation issue
+      const filePromises = sectionAllocations.map(async (secInfo, index) => {
+        const { name: sectionName, count: sectionAllocated } = secInfo;
+        if (sectionAllocated <= 0) {
+          return { name: sectionName, mcqs: [], numericals: [] };
+        }
+
+        // Determine MCQ vs Numerical split for this section
         let numericalCount = 0;
-        if (sec.count >= 25) numericalCount = 5;
-        else if (sec.count >= 10) numericalCount = 3;
-        else if (sec.count >= 5) numericalCount = 1;
-        else numericalCount = Math.floor(sec.count * 0.2) || 1;
+        if (sectionAllocated >= 25) numericalCount = 5;
+        else if (sectionAllocated >= 10) numericalCount = 3;
+        else if (sectionAllocated >= 5) numericalCount = 1;
+        else numericalCount = Math.floor(sectionAllocated * 0.2) || 1;
         
-        numericalCount = Math.min(numericalCount, sec.count);
-        const mcqCount = Math.max(0, sec.count - numericalCount);
-        
-        return `
-        "${sec.name}": {
-          "name": "${sec.name}",
-          "mcqs": [ // MUST contain exactly ${mcqCount} MCQ questions
-             { "id": "...", "type": "mcq", "text": "...", "options": ["A", "B", "C", "D"], "correctAnswer": "A" }
-          ],
-          "numericals": [ // MUST contain exactly ${numericalCount} numerical questions
-             { "id": "...", "type": "numerical", "text": "...", "correctAnswer": "5" }
-          ]
-        }`;
-      }).join(",");
+        numericalCount = Math.min(numericalCount, sectionAllocated);
+        const mcqCount = Math.max(0, sectionAllocated - numericalCount);
 
-      const prompt = `You are a specialized JEE and NEET academic expert. Generate a realistic, high-quality, syllabus-conforming exam on the topic "${topic}".
+        const sectionPrompt = `You are a specialized JEE and NEET academic expert. Generate a realistic, high-quality, syllabus-conforming exam section for the subject "${sectionName}" on the topic "${topic}".
 Difficulty Level: ${difficulty} (standard level).
+Generate exactly ${sectionAllocated} questions for this section:
+- MCQs (Multiple Choice Questions): Generate exactly ${mcqCount} questions.
+- Numericals (single-value integer or decimal answer questions): Generate exactly ${numericalCount} questions.
 
-You MUST return a single valid JSON object representing the entire exam strictly matching this schema:
+You MUST return a single valid JSON object strictly matching this schema:
 {
-  "title": "${topic} Evaluation Test (${difficulty})",
-  "duration": 180,
-  "sections": {${sectionSchemaStr}
-  }
+  "name": "${sectionName}",
+  "mcqs": [
+    {
+      "id": "mcq_${sectionName.toLowerCase()}_${index + 1}_i",
+      "type": "mcq",
+      "text": "Question text here. Keep mathematically sound.",
+      "options": ["A", "B", "C", "D"],
+      "correctAnswer": "A"
+    }
+  ],
+  "numericals": [
+    {
+      "id": "num_${sectionName.toLowerCase()}_${index + 1}_j",
+      "type": "numerical",
+      "text": "Numerical text here.",
+      "correctAnswer": "5"
+    }
+  ]
 }
 
-Keep questions scientifically and mathematically sound. Only output the JSON object. Do not wrap in markdown blocks, formatting, or extra text.`;
+Only output the JSON object. Do not wrap in markdown blocks, formatting, or extra text.`;
 
-      const finalExam = await callGeminiWithRetry(prompt);
-      
-      // Safety check (ensure sections object exists)
-      if (!finalExam.sections) finalExam.sections = {};
-      
-      // Ensure missing sections are added as empty
-      sectArray.forEach(sec => {
-        if (!finalExam.sections[sec]) {
-          finalExam.sections[sec] = { name: sec, mcqs: [], numericals: [] };
+        try {
+          const parsedData = await callGeminiWithRetry(sectionPrompt);
+          return {
+            name: sectionName,
+            mcqs: Array.isArray(parsedData.mcqs) ? parsedData.mcqs : [],
+            numericals: Array.isArray(parsedData.numericals) ? parsedData.numericals : []
+          };
+        } catch (error: any) {
+          console.error(`Error generating section ${sectionName}:`, error);
+          return { name: sectionName, mcqs: [], numericals: [] };
         }
       });
+
+      const sectionResults = await Promise.all(filePromises);
+
+      const finalSections: Record<string, any> = {};
+      sectionResults.forEach((res) => {
+        finalSections[res.name] = res;
+      });
+
+      const finalExam = {
+        title: `${topic} Evaluation Test (${difficulty})`,
+        duration: 180,
+        sections: finalSections
+      };
 
       res.json(finalExam);
     } catch (error: any) {

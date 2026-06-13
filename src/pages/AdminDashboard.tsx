@@ -309,7 +309,16 @@ export default function AdminDashboard({ onStartTest }: { onStartTest: (id: stri
           preparationType: preparationTypeExam
         })
       });
-      const data = await resp.json();
+      
+      let data;
+      const textResponse = await resp.text();
+      try {
+        data = JSON.parse(textResponse);
+      } catch (err) {
+        throw new Error(`Server returned non-JSON response (Status ${resp.status}): ${textResponse.substring(0, 100)}...`);
+      }
+      
+      if (!resp.ok) throw new Error(data.error || `HTTP Error ${resp.status}`);
       if (data.error) throw new Error(data.error);
 
       setExamTitle(data.title);
