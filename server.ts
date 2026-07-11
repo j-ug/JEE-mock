@@ -86,7 +86,9 @@ async function startServer() {
         numericalCount = Math.min(numericalCount, sectionAllocated);
         const mcqCount = Math.max(0, sectionAllocated - numericalCount);
 
-        const sectionPrompt = `You are a specialized JEE and NEET academic expert. Generate a realistic, high-quality, syllabus-conforming exam section for the subject "${sectionName}" on the topic "${topic}".
+        const sectionPrompt = `You are a specialized JEE and NEET academic expert.
+Generate a realistic, high-quality, syllabus-conforming exam section for the subject "${sectionName}".
+The preferred topic/theme is "${topic}". If this topic does not apply to the subject "${sectionName}", you MUST still generate standard ${sectionName} questions aligned with the JEE/NEET curriculum.
 Difficulty Level: ${difficulty} (standard level).
 Generate exactly ${sectionAllocated} questions for this section:
 - MCQs (Multiple Choice Questions): Generate exactly ${mcqCount} questions.
